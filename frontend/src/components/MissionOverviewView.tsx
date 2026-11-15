@@ -41,6 +41,10 @@ interface MissionOverviewViewProps {
   onOpenEmergency: () => void;
   onOpenSansModal?: () => void;
   onOpenOps?: () => void;
+  onOpenFoodSupplies?: () => void;
+  onOpenCommCentre?: () => void;
+  onOpenCompanion?: () => void;
+  onOpenJournal?: () => void;
 }
 
 type TrendTab = 'vitals' | 'sleep_mood' | 'radiation' | 'environment';
@@ -55,6 +59,10 @@ export const MissionOverviewView: React.FC<MissionOverviewViewProps> = ({
   onOpenEmergency,
   onOpenSansModal,
   onOpenOps,
+  onOpenFoodSupplies,
+  onOpenCommCentre,
+  onOpenCompanion,
+  onOpenJournal,
 }) => {
   const [trendDays, setTrendDays] = useState<7 | 14 | 30>(14);
   const [trendTab, setTrendTab] = useState<TrendTab>('sleep_mood');
@@ -779,6 +787,116 @@ export const MissionOverviewView: React.FC<MissionOverviewViewProps> = ({
             >
               Emergency Escalation Checklist
             </button>
+          </div>
+        </div>
+      </section>
+
+      {/* Quick-Access Support Modules: Food & Supplies, Distance from Earth, Personal Companion & Journal */}
+      <section className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <div className="mc-card p-5 flex flex-col justify-between space-y-3">
+          <div>
+            <div className="flex items-center justify-between gap-2 mb-1">
+              <h3 className="text-base font-semibold text-[#FAF9FA]">
+                Food &amp; Life-Support Supplies
+              </h3>
+              <span className="mc-pill bg-emerald-500/15 text-emerald-300 border border-emerald-500/30">
+                ~{state.food_state?.summary.estimated_meal_supply_days ?? 64.6} Sols Projected
+              </span>
+            </div>
+            <p className="text-xs text-[#E5E5E4]/85">
+              {state.food_state?.summary.available_meal_portions ?? 975} primary meal portions ·{' '}
+              {state.food_state?.summary.potable_water_liters ?? 840} L water ·{' '}
+              {state.food_state?.summary.low_stock_count ?? 1} low stock ·{' '}
+              {state.food_state?.summary.expiring_soon_count ?? 2} expiring soon.
+            </p>
+          </div>
+          <div className="flex items-center justify-between pt-2 border-t border-white/[0.06] text-xs">
+            <span className="text-[#8E95A8]">
+              Sol {latest.mission_day}: {state.food_state?.summary.daily_food_consumption_kcal?.toFixed(0) ?? 1305} kcal logged
+            </span>
+            {onOpenFoodSupplies && (
+              <button
+                type="button"
+                onClick={onOpenFoodSupplies}
+                className="mc-btn-secondary px-3 py-1.5 text-xs inline-flex items-center gap-1"
+              >
+                <span>Open Food &amp; Supplies</span>
+                <ChevronRight className="w-3.5 h-3.5" />
+              </button>
+            )}
+          </div>
+        </div>
+
+        <div className="mc-card p-5 flex flex-col justify-between space-y-3">
+          <div>
+            <div className="flex items-center justify-between gap-2 mb-1">
+              <h3 className="text-base font-semibold text-[#FAF9FA]">
+                Distance from Earth &amp; Message Centre
+              </h3>
+              <span className="mc-pill bg-[#A5D8FF]/15 text-[#A5D8FF] border border-[#A5D8FF]/30">
+                {state.comm_centre_state?.one_way_delay_minutes ?? state.comm_state.one_way_delay_minutes}m OW /{' '}
+                {state.comm_centre_state?.round_trip_delay_minutes ??
+                  Number((state.comm_state.one_way_delay_minutes * 2).toFixed(1))}
+                m RT
+              </span>
+            </div>
+            <p className="text-xs text-[#E5E5E4]/85">
+              {state.comm_centre_state?.distance_million_km ?? state.comm_state.distance_million_km}M km from Earth ·{' '}
+              {state.comm_centre_state?.pending_messages_count ?? 1} pending message(s) ·{' '}
+              {state.comm_centre_state?.unsent_health_reports_count ?? state.comm_state.pending_reports_count} unsent report(s).
+            </p>
+          </div>
+          <div className="flex items-center justify-between pt-2 border-t border-white/[0.06] text-xs">
+            <span className="text-[#8E95A8]">
+              Mode: {state.comm_centre_state?.comm_condition ?? 'DELAYED'}
+            </span>
+            {onOpenCommCentre && (
+              <button
+                type="button"
+                onClick={onOpenCommCentre}
+                className="mc-btn-secondary px-3 py-1.5 text-xs inline-flex items-center gap-1"
+              >
+                <span>Open Message Centre</span>
+                <ChevronRight className="w-3.5 h-3.5" />
+              </button>
+            )}
+          </div>
+        </div>
+
+        <div className="mc-card p-5 flex flex-col justify-between space-y-3">
+          <div>
+            <div className="flex items-center justify-between gap-2 mb-1">
+              <h3 className="text-base font-semibold text-[#FAF9FA]">
+                TARSCARE Personal Companion
+              </h3>
+              <span className="mc-pill bg-emerald-500/15 text-emerald-300 border border-emerald-500/30">
+                Always Here, Offline
+              </span>
+            </div>
+            <p className="text-xs text-[#E5E5E4]/85">
+              Private personal journal ({state.companion_state?.journal_entries.length ?? 3} entries), self-reported mood check-ins, and empathetic onboard AI companion.
+            </p>
+          </div>
+          <div className="flex items-center justify-end gap-2 pt-2 border-t border-white/[0.06] text-xs">
+            {onOpenJournal && (
+              <button
+                type="button"
+                onClick={onOpenJournal}
+                className="mc-btn-secondary px-3 py-1.5 text-xs"
+              >
+                My Journal
+              </button>
+            )}
+            {onOpenCompanion && (
+              <button
+                type="button"
+                onClick={onOpenCompanion}
+                className="mc-btn-primary px-3 py-1.5 text-xs inline-flex items-center gap-1"
+              >
+                <span>Open Companion</span>
+                <ChevronRight className="w-3.5 h-3.5" />
+              </button>
+            )}
           </div>
         </div>
       </section>

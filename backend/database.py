@@ -370,6 +370,9 @@ def init_db() -> None:
         )
         conn.commit()
 
+    from support_modules import init_support_tables
+    init_support_tables(conn)
+
     conn.close()
 
 

@@ -372,6 +372,9 @@ export interface IntegratedAssessment {
   eva_readiness?: EvaReadiness;
   predictive_runways?: PredictiveRunways;
   latest_sans?: SansAssessmentRecord | null;
+  food_alerts?: FoodAlertItem[];
+  nutrition_overview?: NutritionOverview;
+  five_hazard_support_integration?: Record<string, { connected_modules: string[]; summary: string }>;
 }
 
 export interface BaselineHistoryItem {
@@ -482,6 +485,11 @@ export interface FullSystemState {
   comm_state: {
     earth_comm_status: string;
     one_way_delay_minutes: number;
+    round_trip_delay_minutes?: number;
+    comm_condition?: string;
+    mission_location?: string;
+    mission_destination?: string;
+    pending_messages_count?: number;
     distance_million_km: number;
     last_sync_timestamp: string;
     offline_mode_forced: boolean;
@@ -501,6 +509,9 @@ export interface FullSystemState {
   biosample_records?: BiosampleRecord[];
   donki_state?: DonkiStateSummary;
   insight_state?: InsightStateSummary;
+  food_state?: FoodAndSuppliesState;
+  comm_centre_state?: CommCentreState;
+  companion_state?: CompanionAndJournalState;
   knowledge_corpus: KnowledgeDocItem[];
   local_ai_status?: LocalAIStatus;
 }
@@ -788,4 +799,399 @@ export interface BiosampleRecord {
   assay_imported_at: string;
   created_at?: string;
 }
+
+// ============================================================================
+// PART 1: FOOD & LIFE-SUPPORT SUPPLIES INTERFACES
+// ============================================================================
+
+export type FoodItemStatus = 'AVAILABLE' | 'RUNNING_LOW' | 'CRITICAL' | 'EXPIRING_SOON' | 'EXPIRED';
+
+export interface FoodItemRecord {
+  id?: number;
+  item_uid: string;
+  name: string;
+  category: string;
+  quantity: number;
+  initial_quantity: number;
+  serving_size: string;
+  unit: string;
+  calories_per_serving: number;
+  protein_g: number;
+  carbs_g: number;
+  fat_g: number;
+  water_ml_per_serving: number;
+  micronutrients: Record<string, number>;
+  nutrition_complete: boolean;
+  storage_requirements: string;
+  bay_location: string;
+  expiry_sol: number;
+  expiry_date: string;
+  shelf_life_days: number;
+  sols_until_expiry: number;
+  added_sol: number;
+  date_added: string;
+  food_source: string;
+  min_threshold: number;
+  critical_threshold: number;
+  daily_ration_per_astronaut: number;
+  status: FoodItemStatus;
+  provenance: string;
+  notes: string;
+  updated_at: string;
+}
+
+export interface FoodConsumptionRecord {
+  id?: number;
+  consumption_uid: string;
+  crew_id: string;
+  mission_day: number;
+  meal_type: string;
+  food_item_uid: string;
+  food_name: string;
+  category: string;
+  quantity_consumed: number;
+  unit: string;
+  calories: number;
+  protein_g: number;
+  carbs_g: number;
+  fat_g: number;
+  water_ml: number;
+  micronutrients: Record<string, number>;
+  is_estimated_nutrition: boolean;
+  notes: string;
+  provenance: string;
+  recorded_at: string;
+}
+
+export interface ResupplyRecord {
+  id?: number;
+  resupply_uid: string;
+  mission_day: number;
+  event_type: string;
+  food_item_uid: string;
+  food_name: string;
+  quantity_delta: number;
+  quantity_after: number;
+  unit: string;
+  source: string;
+  authorised_by: string;
+  notes: string;
+  provenance: string;
+  recorded_at: string;
+}
+
+export interface SupplyProjectionResult {
+  is_projection: boolean;
+  projection_disclaimer: string;
+  total_portions: number;
+  astronaut_count: number;
+  portions_per_astronaut_per_day: number;
+  daily_crew_consumption_rate: number;
+  estimated_remaining_days: number;
+  projected_depletion_sol: number;
+  projected_depletion_date: string;
+  planned_mission_end_sol: number;
+  mission_remaining_sols: number;
+  next_resupply_sol: number | null;
+  covers_until_resupply: boolean;
+  covers_full_mission: boolean;
+}
+
+export interface CategorySupplyProjection {
+  category: string;
+  item_count: number;
+  available_quantity: number;
+  unit: string;
+  configured_daily_crew_rate: number;
+  effective_daily_crew_rate: number;
+  estimated_remaining_days: number;
+  projected_depletion_sol: number;
+  projected_depletion_date: string;
+  consumption_trend: 'ELEVATED_CONSUMPTION' | 'CONSERVING' | 'NOMINAL_STEADY' | string;
+  status: RiskLevel;
+  is_projection: boolean;
+}
+
+export interface NutritionTargets {
+  crew_id: string;
+  calories_target_kcal: number;
+  protein_target_g: number;
+  carbs_target_g: number;
+  fat_target_g: number;
+  water_target_ml: number;
+  vitamin_d_target_iu: number;
+  calcium_target_mg: number;
+  notes: string;
+  updated_at: string;
+}
+
+export interface NutritionOverview {
+  crew_id: string;
+  mission_day: number;
+  targets: NutritionTargets;
+  recorded: {
+    calories_kcal: number;
+    protein_g: number;
+    carbs_g: number;
+    fat_g: number;
+    water_ml: number;
+    micronutrients: Record<string, number>;
+    meals_logged_count: number;
+    contains_estimated_values: boolean;
+  };
+  progress_pct: {
+    calories: number;
+    protein: number;
+    carbs: number;
+    fat: number;
+    water: number;
+  };
+  explanations: string[];
+  safety_disclaimer: string;
+}
+
+export interface FoodAlertItem {
+  alert_uid: string;
+  alert_type: string;
+  severity: RiskLevel;
+  affected_item_uid: string;
+  affected_item_name: string;
+  current_quantity: number;
+  unit: string;
+  recommended_action: string;
+  timestamp: string;
+}
+
+export interface FoodAndSuppliesState {
+  mission_config: {
+    crew_count: number;
+    current_mission_sol: number;
+    planned_mission_end_sol: number;
+    next_resupply_sol: number;
+    next_resupply_label: string;
+    portions_per_astronaut_per_day: number;
+    water_liters_per_astronaut_per_day: number;
+    water_warning_threshold_liters: number;
+  };
+  summary: {
+    total_food_items: number;
+    available_meal_portions: number;
+    total_kcal_available: number;
+    estimated_meal_supply_days: number;
+    estimated_caloric_supply_days: number;
+    potable_water_liters: number;
+    estimated_water_supply_days: number;
+    low_stock_count: number;
+    expiring_soon_count: number;
+    daily_food_consumption_kcal: number;
+    daily_water_consumption_ml: number;
+    provenance_note: string;
+  };
+  primary_meal_projection: SupplyProjectionResult;
+  category_projections: CategorySupplyProjection[];
+  nutrition_overview: NutritionOverview;
+  items: FoodItemRecord[];
+  low_stock_items: FoodItemRecord[];
+  expiring_soon_items: FoodItemRecord[];
+  food_alerts: FoodAlertItem[];
+  consumption_history: FoodConsumptionRecord[];
+  resupply_history: ResupplyRecord[];
+}
+
+// ============================================================================
+// PART 2: DISTANCE FROM EARTH & MISSION COMMUNICATION INTERFACES
+// ============================================================================
+
+export interface CommScenarioPreset {
+  scenario_id: string;
+  label: string;
+  mission_location: string;
+  mission_destination: string;
+  distance_million_km: number;
+  one_way_delay_minutes: number;
+  comm_condition: 'NORMAL' | 'DELAYED' | 'INTERMITTENT' | 'BLACKOUT' | string;
+  earth_comm_status: string;
+  offline_mode_forced: boolean;
+  signal_quality_pct: number;
+  bandwidth_kbps: number;
+  relay_satellite: string;
+  next_comm_window_utc: string;
+  telemetry_source_type: string;
+  explanation: string;
+}
+
+export type CommMessageStatus =
+  | 'Draft'
+  | 'Queued'
+  | 'Waiting for Connection'
+  | 'Sending'
+  | 'Sent'
+  | 'Failed';
+
+export interface CommMessageRecord {
+  id?: number;
+  message_uid: string;
+  crew_id: string;
+  sender_name: string;
+  recipient: string;
+  message_type: string;
+  priority: 'NORMAL' | 'IMPORTANT' | 'URGENT' | string;
+  subject: string;
+  body: string;
+  status: CommMessageStatus;
+  one_way_delay_minutes: number;
+  round_trip_delay_minutes: number;
+  distance_million_km: number;
+  created_at: string;
+  updated_at: string;
+  sent_at?: string | null;
+  acknowledged_at?: string | null;
+  retry_count: number;
+  failure_reason: string;
+  linked_report_uid: string;
+  provenance: string;
+}
+
+export interface SyncHistoryRecord {
+  id?: number;
+  sync_uid: string;
+  timestamp: string;
+  mission_day: number;
+  comm_condition: string;
+  one_way_delay_minutes: number;
+  round_trip_delay_minutes: number;
+  distance_million_km: number;
+  messages_attempted: number;
+  messages_sent: number;
+  messages_failed: number;
+  reports_synced: number;
+  status: string;
+  summary: string;
+}
+
+export interface CommCentreState {
+  mission_location: string;
+  mission_destination: string;
+  scenario_id: string;
+  comm_condition: 'NORMAL' | 'DELAYED' | 'INTERMITTENT' | 'BLACKOUT' | string;
+  earth_comm_status: string;
+  offline_mode_forced: boolean;
+  distance_million_km: number;
+  distance_au: number;
+  one_way_delay_minutes: number;
+  round_trip_delay_minutes: number;
+  signal_quality_pct: number;
+  bandwidth_kbps: number;
+  relay_satellite: string;
+  last_successful_comm: string;
+  last_sync_timestamp: string;
+  next_comm_window_utc: string;
+  telemetry_source_type: string;
+  pending_messages_count: number;
+  draft_messages_count: number;
+  unsent_health_reports_count: number;
+  scenario_presets: CommScenarioPreset[];
+  messages: CommMessageRecord[];
+  sync_history: SyncHistoryRecord[];
+  latency_explanation: string;
+  local_vs_earth_capabilities: {
+    available_locally_offline: string[];
+    requires_earth_connectivity: string[];
+  };
+}
+
+// ============================================================================
+// PART 3: ISOLATION SUPPORT — PERSONAL JOURNAL & AI COMPANION INTERFACES
+// ============================================================================
+
+export interface JournalEntryRecord {
+  id?: number;
+  entry_uid: string;
+  crew_id: string;
+  mission_day: number;
+  title: string;
+  content: string;
+  mood: string;
+  feelings: string[];
+  tags: string[];
+  guided_prompt: string;
+  is_private: boolean;
+  allow_ai_access: boolean;
+  provenance: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface MoodCheckInRecord {
+  id?: number;
+  checkin_uid: string;
+  crew_id: string;
+  mission_day: number;
+  mood: string;
+  mood_numeric: number;
+  feelings: string[];
+  note: string;
+  source: string;
+  provenance: string;
+  recorded_at: string;
+}
+
+export interface CompanionPrivacySettings {
+  crew_id: string;
+  allow_ai_journal_context: boolean;
+  allow_ai_mood_context: boolean;
+  allow_ai_mission_telemetry_context: boolean;
+  store_companion_history: boolean;
+  preferred_topics: string[];
+  escalation_contact_role: string;
+  escalation_procedure_note: string;
+  updated_at: string;
+}
+
+export interface CompanionMessageRecord {
+  id?: number;
+  message_uid: string;
+  conversation_uid?: string;
+  crew_id?: string;
+  role: 'user' | 'assistant';
+  content: string;
+  engine_used: string;
+  safety_escalation_triggered: boolean;
+  support_tier: string;
+  suggested_coping: string[];
+  created_at: string;
+}
+
+export interface CompanionConversationRecord {
+  id?: number;
+  conversation_uid: string;
+  crew_id: string;
+  title: string;
+  conversation_mode: string;
+  created_at: string;
+  updated_at: string;
+  messages: CompanionMessageRecord[];
+}
+
+export interface CompanionAndJournalState {
+  crew_id: string;
+  feature_title: string;
+  privacy_settings: CompanionPrivacySettings;
+  guided_reflection_prompts: string[];
+  mood_levels: string[];
+  feeling_tags: string[];
+  journal_entries: JournalEntryRecord[];
+  mood_checkins: MoodCheckInRecord[];
+  mood_trend: {
+    sol: number;
+    mood: string;
+    mood_numeric: number;
+    feelings: string[];
+    recorded_at: string;
+  }[];
+  conversations: CompanionConversationRecord[];
+  local_ai_status: LocalAIStatus;
+  non_diagnostic_disclaimer: string;
+}
+
 

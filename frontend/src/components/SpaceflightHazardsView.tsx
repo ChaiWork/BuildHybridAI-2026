@@ -32,6 +32,7 @@ interface SpaceflightHazardsViewProps {
   onStateUpdated: (next: FullSystemState) => void;
   onAskAssistant: (prompt: string) => void;
   onOpenSansModal?: () => void;
+  onNavigateModule?: (tab: string) => void;
 }
 
 const HAZARD_META = [
@@ -67,6 +68,7 @@ export const SpaceflightHazardsView: React.FC<SpaceflightHazardsViewProps> = ({
   onStateUpdated,
   onAskAssistant,
   onOpenSansModal,
+  onNavigateModule,
 }) => {
   const modules = state.assessment.hazard_modules_4step || [];
   const activeMod = modules.find((m) => m.id === activeHazardId) || modules[0];
@@ -484,6 +486,58 @@ export const SpaceflightHazardsView: React.FC<SpaceflightHazardsViewProps> = ({
       {activeMod.id === 'environment' && (
         <InsightWeatherPanel state={state} onStateUpdated={onStateUpdated} />
       )}
+
+      {/* Five-Hazard Integrated Support Modules Panel */}
+      <section className="mc-card p-5 lg:p-6 space-y-3">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div>
+            <h2 className="text-base font-semibold text-[#FAF9FA]">
+              Connected Astronaut Support Systems ({activeMod.title})
+            </h2>
+            <p className="text-xs text-[#8E95A8]">
+              Integrates Food &amp; Life-Support Supplies, Distance from Earth Communication, and Personal Journal &amp; AI Companion into the Five-Hazard model.
+            </p>
+          </div>
+          {onNavigateModule && (
+            <div className="flex flex-wrap gap-2 text-xs">
+              <button
+                type="button"
+                onClick={() => onNavigateModule('food')}
+                className="mc-btn-secondary px-3 py-1.5"
+              >
+                Open Food &amp; Supplies
+              </button>
+              <button
+                type="button"
+                onClick={() => onNavigateModule('comm')}
+                className="mc-btn-secondary px-3 py-1.5"
+              >
+                Open Distance from Earth
+              </button>
+              <button
+                type="button"
+                onClick={() => onNavigateModule('companion')}
+                className="mc-btn-primary px-3 py-1.5"
+              >
+                Open Personal Companion &amp; Journal
+              </button>
+            </div>
+          )}
+        </div>
+        <div className="grid grid-cols-1 md:grid-cols-5 gap-3 text-xs">
+          {Object.entries(state.assessment.five_hazard_support_integration || {}).map(
+            ([hzName, info]) => (
+              <div key={hzName} className="p-3 rounded-xl bg-[#0B0D1A] space-y-1">
+                <div className="font-semibold text-[#FAF9FA]">{hzName}</div>
+                <div className="text-[11px] text-[#A5D8FF]">
+                  {info.connected_modules.join(' · ')}
+                </div>
+                <p className="text-[11px] text-[#E5E5E4]/80">{info.summary}</p>
+              </div>
+            )
+          )}
+        </div>
+      </section>
     </div>
   );
 };

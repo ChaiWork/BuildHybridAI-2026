@@ -48,26 +48,34 @@ import {
   CommunicationStatusView,
   HealthHistoryView,
 } from './components/HealthHistoryAndCommViews';
+import { FoodSuppliesView } from './components/FoodSuppliesView';
+import { PersonalCompanionView } from './components/PersonalCompanionView';
 
 type NavTab =
   | 'overview'
   | 'assessment'
+  | 'food'
   | 'devices'
   | 'hazards'
   | 'ops'
   | 'assistant'
+  | 'companion'
+  | 'journal'
   | 'history'
   | 'comm';
 
 const NAV_ITEMS: { id: NavTab; label: string }[] = [
   { id: 'overview', label: 'Mission Overview' },
   { id: 'assessment', label: 'Health Assessment' },
+  { id: 'food', label: 'Food & Supplies' },
+  { id: 'comm', label: 'Distance from Earth' },
+  { id: 'companion', label: 'Personal Companion' },
+  { id: 'journal', label: 'My Journal' },
   { id: 'devices', label: 'Medical Devices' },
   { id: 'hazards', label: 'Spaceflight Hazards' },
   { id: 'ops', label: 'Crew & Med Ops' },
   { id: 'assistant', label: 'AI Health Assistant' },
   { id: 'history', label: 'Health History' },
-  { id: 'comm', label: 'Communication Status' },
 ];
 
 export default function App() {
@@ -558,6 +566,10 @@ export default function App() {
           onOpenEmergency={() => triggerEmergencyProtocol()}
           onOpenSansModal={() => setSansModalOpen(true)}
           onOpenOps={() => setActiveTab('ops')}
+          onOpenFoodSupplies={() => setActiveTab('food')}
+          onOpenCommCentre={() => setActiveTab('comm')}
+          onOpenCompanion={() => setActiveTab('companion')}
+          onOpenJournal={() => setActiveTab('journal')}
         />
       )}
 
@@ -573,6 +585,35 @@ export default function App() {
             setDeviceFocusId(opts?.deviceId);
             setActiveTab('devices');
           }}
+        />
+      )}
+
+      {activeTab === 'food' && (
+        <FoodSuppliesView
+          state={state}
+          apiBase=""
+          onStateUpdate={setState}
+          onNavigate={(tab) => setActiveTab(tab as NavTab)}
+        />
+      )}
+
+      {activeTab === 'companion' && (
+        <PersonalCompanionView
+          key="companion-view"
+          state={state}
+          apiBase=""
+          onStateUpdate={setState}
+          initialTab="companion"
+        />
+      )}
+
+      {activeTab === 'journal' && (
+        <PersonalCompanionView
+          key="journal-view"
+          state={state}
+          apiBase=""
+          onStateUpdate={setState}
+          initialTab="journal"
         />
       )}
 
@@ -598,6 +639,7 @@ export default function App() {
             setActiveTab('assistant');
           }}
           onOpenSansModal={() => setSansModalOpen(true)}
+          onNavigateModule={(tab) => setActiveTab(tab as NavTab)}
         />
       )}
 
