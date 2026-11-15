@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
-import { BookOpen, Cpu, ExternalLink, RefreshCw, Send, Sparkles } from 'lucide-react';
-import { FullSystemState, RAGAnalysisResponse } from '../types';
+import { AlertTriangle, BookOpen, Cpu, ExternalLink, RefreshCw, Send, Sparkles } from 'lucide-react';
+import { FullSystemState, KnowledgeDocItem, RAGAnalysisResponse } from '../types';
+import { OfflineDocModal } from './OfflineDocModal';
 import { apiRequest, updateLocalAIConfig, warmupLocalAI } from './uiHelpers';
 
 interface AIHealthAssistantViewProps {
@@ -32,6 +33,7 @@ export const AIHealthAssistantView: React.FC<AIHealthAssistantViewProps> = ({
   const [loading, setLoading] = useState(false);
   const [aiBusy, setAiBusy] = useState(false);
   const [aiNotice, setAiNotice] = useState<string | null>(null);
+  const [selectedDoc, setSelectedDoc] = useState<{ doc: KnowledgeDocItem; excerpt?: string } | null>(null);
   const [turns, setTurns] = useState<ChatTurn[]>([
     {
       role: 'assistant',
@@ -39,6 +41,27 @@ export const AIHealthAssistantView: React.FC<AIHealthAssistantViewProps> = ({
       response: state.assessment.rag_analysis,
     },
   ]);
+
+  const openOfflineDoc = (docId: string, excerpt?: string, fallbackTitle?: string, fallbackAgency?: string, fallbackUrl?: string, fallbackHazard?: string) => {
+    const match = state.knowledge_corpus.find((d) => d.doc_id === docId);
+    if (match) {
+      setSelectedDoc({ doc: match, excerpt });
+      return;
+    }
+    setSelectedDoc({
+      doc: {
+        doc_id: docId,
+        title: fallbackTitle || docId,
+        agency: fallbackAgency || 'NASA / CSA',
+        year: 'Reference',
+        hazard_category: fallbackHazard || 'Spaceflight Health',
+        url: fallbackUrl || 'tarscare://offline/citation',
+        provenance: 'OFFLINE_CITATION',
+        content: excerpt || 'Offline excerpt unavailable.',
+      },
+      excerpt,
+    });
+  };
 
   const askQuestion = async (q: string) => {
     const trimmed = q.trim();
@@ -154,6 +177,8 @@ export const AIHealthAssistantView: React.FC<AIHealthAssistantViewProps> = ({
           <div className="flex flex-wrap items-center gap-2">
             {aiStatus?.ollama_available && chatModels.length > 0 && (
               <select
+                id="ai-chat-model-select"
+                name="ollama_chat_model"
                 value={aiStatus.ollama_model || chatModels[0]}
                 onChange={(e) => handleModelChange(e.target.value)}
                 disabled={aiBusy}
@@ -260,25 +285,86 @@ export const AIHealthAssistantView: React.FC<AIHealthAssistantViewProps> = ({
                     </span>
                   </div>
 
+                  {turn.response.conflict_notice && (
+                    <div className="rounded-xl bg-amber-500/10 border border-amber-400/35 px-3 py-2 text-xs text-amber-100 flex items-start gap-2 leading-relaxed">
+                      <AlertTriangle className="w-3.5 h-3.5 text-amber-300 shrink-0 mt-0.5" />
+                      <span>{turn.response.conflict_notice}</span>
+                    </div>
+                  )}
+
+                  {((turn.response.scientific_evidence?.length || 0) > 0 || (turn.response.operational_procedures?.length || 0) > 0) && (
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-2 text-xs">
+                      {(turn.response.scientific_evidence?.length || 0) > 0 && (
+                        <div className="rounded-xl bg-[#121522] p-2.5 border border-white/[0.06] space-y-1.5">
+                          <div className="font-semibold text-[#A5D8FF]">NASA / CSA Scientific Evidence</div>
+                          <ul className="space-y-1.5 text-[#E5E5E4]/90">
+                            {turn.response.scientific_evidence!.map((ev, i) => (
+                              <li key={`${ev.doc_id}-${i}`} className="leading-snug">
+                                <span className="font-mono text-[#A5D8FF]">{ev.doc_id}</span>{' '}
+                                <span className="text-[#E5E5E4]/70">({ev.agency}):</span> {ev.excerpt}
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
+                      {(turn.response.operational_procedures?.length || 0) > 0 && (
+                        <div className="rounded-xl bg-[#121522] p-2.5 border border-[#A5D8FF]/20 space-y-1.5">
+                          <div className="font-semibold text-[#A5D8FF]">TARSCARE Operational Procedures</div>
+                          <ul className="space-y-1.5 text-[#E5E5E4]/90">
+                            {turn.response.operational_procedures!.map((op, i) => (
+                              <li key={`${op.doc_id}-${i}`} className="leading-snug">
+                                <span className="font-mono text-[#A5D8FF]">{op.doc_id}</span>:{' '}
+                                {op.excerpt}
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
                   {turn.response.citations.length > 0 && (
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                      {turn.response.citations.slice(0, 4).map((c) => (
-                        <a
-                          key={c.chunk_id}
-                          href={c.url}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="rounded-xl bg-[#121522] p-2.5 border border-white/[0.07] hover:border-[#A5D8FF]/45 transition-colors block"
-                        >
-                          <div className="flex items-center justify-between gap-1 text-xs font-semibold text-[#FAF9FA]">
-                            <span className="truncate">{c.doc_id} · {c.agency}</span>
-                            <ExternalLink className="w-3 h-3 text-[#A5D8FF] shrink-0" />
+                      {turn.response.citations.slice(0, 4).map((c) => {
+                        const isHttp = c.url.startsWith('http://') || c.url.startsWith('https://');
+                        return (
+                          <div
+                            key={c.chunk_id}
+                            className="rounded-xl bg-[#121522] p-2.5 border border-white/[0.07] hover:border-[#A5D8FF]/45 transition-colors flex flex-col justify-between gap-2"
+                          >
+                            <div>
+                              <div className="flex items-center justify-between gap-1 text-xs font-semibold text-[#FAF9FA]">
+                                <span className="truncate">{c.doc_id} · {c.agency}</span>
+                                <span className="text-[11px] text-[#A5D8FF]">Rel {(c.relevance_score * 100).toFixed(0)}%</span>
+                              </div>
+                              <div className="text-xs text-[#E5E5E4]/85 line-clamp-2 mt-1">
+                                {c.excerpt}
+                              </div>
+                            </div>
+                            <div className="flex items-center justify-between gap-2 pt-1 border-t border-white/[0.06]">
+                              <button
+                                type="button"
+                                onClick={() => openOfflineDoc(c.doc_id, c.excerpt, c.title, c.agency, c.url, c.hazard_category)}
+                                className="text-xs font-semibold text-[#A5D8FF] hover:underline inline-flex items-center gap-1"
+                              >
+                                <BookOpen className="w-3 h-3" />
+                                <span>Read Offline</span>
+                              </button>
+                              {isHttp && (
+                                <a
+                                  href={c.url}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  className="text-[11px] text-[#E5E5E4]/65 hover:text-[#FAF9FA] inline-flex items-center gap-1"
+                                >
+                                  <span>Web (Requires Internet)</span>
+                                  <ExternalLink className="w-3 h-3" />
+                                </a>
+                              )}
+                            </div>
                           </div>
-                          <div className="text-xs text-[#E5E5E4]/85 line-clamp-2 mt-1">
-                            {c.excerpt}
-                          </div>
-                        </a>
-                      ))}
+                        );
+                      })}
                     </div>
                   )}
 
@@ -300,6 +386,8 @@ export const AIHealthAssistantView: React.FC<AIHealthAssistantViewProps> = ({
           className="flex flex-wrap items-center gap-2.5 pt-2 border-t border-white/[0.08]"
         >
           <select
+            id="ai-hazard-filter"
+            name="hazard_filter"
             value={hazardFilter}
             onChange={(e) => setHazardFilter(e.target.value)}
             aria-label="Filter knowledge base by spaceflight hazard"
@@ -314,6 +402,9 @@ export const AIHealthAssistantView: React.FC<AIHealthAssistantViewProps> = ({
           </select>
 
           <input
+            id="ai-question-input"
+            name="assistant_question"
+            aria-label="Ask TARSCARE medical knowledge assistant"
             type="text"
             value={question}
             onChange={(e) => setQuestion(e.target.value)}
@@ -340,37 +431,58 @@ export const AIHealthAssistantView: React.FC<AIHealthAssistantViewProps> = ({
             <h2 className="text-lg font-semibold text-[#FAF9FA]">Indexed Scientific Sources</h2>
           </div>
           <span className="text-xs px-2.5 py-0.5 rounded-full bg-[#0B0D1A] text-[#A5D8FF] border border-[#A5D8FF]/30">
-            {state.knowledge_corpus.length} Docs · Real Research Data
+            {state.knowledge_corpus.length} Docs · Offline Corpus
           </span>
         </div>
 
         <p className="text-xs text-[#E5E5E4]/80 leading-relaxed">
-          All guidance retrieves from these pre-bundled NASA &amp; CSA references offline without cloud connectivity. Does not prescribe medications or override emergency procedures.
+          All guidance retrieves from these pre-bundled NASA, CSA &amp; TARSCARE references offline without cloud connectivity. Does not prescribe medications or override emergency procedures.
         </p>
 
         <div className="space-y-2.5 max-h-[600px] overflow-y-auto pr-1">
-          {state.knowledge_corpus.map((doc) => (
-            <div key={doc.doc_id} className="rounded-xl bg-[#0B0D1A] p-3.5 border border-white/[0.06]">
-              <div className="flex items-center justify-between gap-2">
-                <span className="text-xs font-semibold text-[#A5D8FF]">
-                  {doc.agency} · {doc.doc_id}
-                </span>
-                <a
-                  href={doc.url}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="text-xs text-[#E5E5E4]/75 hover:text-[#FAF9FA] inline-flex items-center gap-1"
-                >
-                  <span>Source</span>
-                  <ExternalLink className="w-3 h-3" />
-                </a>
+          {state.knowledge_corpus.map((doc) => {
+            const isHttp = doc.url.startsWith('http://') || doc.url.startsWith('https://');
+            return (
+              <div key={doc.doc_id} className="rounded-xl bg-[#0B0D1A] p-3.5 border border-white/[0.06] space-y-1.5">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-xs font-semibold text-[#A5D8FF]">
+                    {doc.agency} · {doc.doc_id}
+                  </span>
+                  <div className="flex items-center gap-2.5">
+                    <button
+                      type="button"
+                      onClick={() => setSelectedDoc({ doc })}
+                      className="text-xs font-semibold text-[#A5D8FF] hover:underline inline-flex items-center gap-1"
+                    >
+                      <BookOpen className="w-3 h-3" />
+                      <span>Read Offline</span>
+                    </button>
+                    {isHttp && (
+                      <a
+                        href={doc.url}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="text-[11px] text-[#E5E5E4]/65 hover:text-[#FAF9FA] inline-flex items-center gap-1"
+                      >
+                        <span>Web (Requires Internet)</span>
+                        <ExternalLink className="w-3 h-3" />
+                      </a>
+                    )}
+                  </div>
+                </div>
+                <div className="text-sm font-medium text-[#FAF9FA]">{doc.title}</div>
+                <div className="text-xs text-[#E5E5E4]/75">{doc.hazard_category}</div>
               </div>
-              <div className="text-sm font-medium text-[#FAF9FA] mt-1">{doc.title}</div>
-              <div className="text-xs text-[#E5E5E4]/75 mt-0.5">{doc.hazard_category}</div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       </div>
+
+      <OfflineDocModal
+        doc={selectedDoc?.doc || null}
+        highlightedExcerpt={selectedDoc?.excerpt}
+        onClose={() => setSelectedDoc(null)}
+      />
     </div>
   );
 };

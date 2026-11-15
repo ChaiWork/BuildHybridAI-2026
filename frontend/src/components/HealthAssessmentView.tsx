@@ -1,6 +1,9 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
+  AlertTriangle,
   CheckCircle2,
+  ChevronDown,
+  ChevronUp,
   ClipboardCheck,
   ShieldAlert,
   Sparkles,
@@ -13,10 +16,19 @@ interface HealthAssessmentViewProps {
   state: FullSystemState;
   focusedRegionId?: string;
   onStateUpdated: (nextState: FullSystemState) => void;
-  onOpenEmergency: () => void;
+  onOpenEmergency: (hazardName?: string) => void;
 }
 
 const SYMPTOM_CATEGORIES = [
+  {
+    category: 'Cardiopulmonary Red Flags (Urgent)',
+    items: [
+      'Chest pain / discomfort',
+      'Palpitations',
+      'Shortness of breath',
+      'Faintness / presyncope',
+    ],
+  },
   {
     category: 'Neurological & Mood',
     items: [
@@ -32,9 +44,8 @@ const SYMPTOM_CATEGORIES = [
   {
     category: 'Eyes, Balance & Gravity',
     items: [
-      'Blurred / near vision change',
-      'Dizziness / lightheadedness',
-      'Faintness / presyncope',
+      'Visual disturbances',
+      'Dizziness',
       'Balance loss / disorientation',
     ],
   },
@@ -43,7 +54,6 @@ const SYMPTOM_CATEGORIES = [
     items: [
       'Mild dry cough',
       'Throat irritation',
-      'Shortness of breath',
       'Nasal congestion',
     ],
   },
@@ -57,6 +67,55 @@ const SYMPTOM_CATEGORIES = [
   },
 ];
 
+function buildFormFromTelemetry(latest: FullSystemState['latest_telemetry']) {
+  const combinedSymptoms: string[] = [];
+  if (latest.chest_discomfort) combinedSymptoms.push('Chest pain / discomfort');
+  if (latest.palpitations) combinedSymptoms.push('Palpitations');
+  if (latest.shortness_of_breath) combinedSymptoms.push('Shortness of breath');
+  if (latest.faintness_presyncope) combinedSymptoms.push('Faintness / presyncope');
+  (latest.reported_symptoms || []).forEach((s) => {
+    if (s && !combinedSymptoms.includes(s)) combinedSymptoms.push(s);
+  });
+  (latest.respiratory_symptoms || []).forEach((s) => {
+    if (s && !combinedSymptoms.includes(s)) combinedSymptoms.push(s);
+  });
+
+  return {
+    form: {
+      mission_phase: latest.mission_phase as MissionPhase,
+      gravity_g: latest.gravity_g,
+      heart_rate_bpm: latest.heart_rate_bpm,
+      systolic_bp_mmhg: latest.systolic_bp_mmhg,
+      diastolic_bp_mmhg: latest.diastolic_bp_mmhg,
+      spo2_pct: latest.spo2_pct,
+      respiratory_rate_bpm: latest.respiratory_rate_bpm ?? 16,
+      body_temp_c: latest.body_temp_c,
+      sleep_duration_hrs: latest.sleep_duration_hrs,
+      sleep_quality_pct: latest.sleep_quality_pct,
+      mood_score: latest.mood_score,
+      stress_level: latest.stress_level,
+      fatigue_level: latest.fatigue_level,
+      social_interaction_score: latest.social_interaction_score,
+      absorbed_dose_mgy: latest.absorbed_dose_mgy,
+      equivalent_dose_rate_msv_day: latest.equivalent_dose_rate_msv_day,
+      radiation_event_type: latest.radiation_event_type || 'GCR_MARS_SHIELDED',
+      co2_mmhg: latest.co2_mmhg,
+      cabin_temp_c: latest.cabin_temp_c,
+      oxygen_pct: latest.oxygen_pct,
+      humidity_pct: latest.humidity_pct,
+      air_quality_index: latest.air_quality_index,
+      physical_activity_mins: latest.physical_activity_mins,
+      exercise_performance_pct: latest.exercise_performance_pct,
+      muscle_strength_idx: latest.muscle_strength_idx,
+      exercise_adherence_pct: latest.exercise_adherence_pct,
+      balance_score: latest.balance_score,
+      dizziness_severity: latest.dizziness_severity,
+      notes: '',
+    },
+    symptoms: combinedSymptoms,
+  };
+}
+
 export const HealthAssessmentView: React.FC<HealthAssessmentViewProps> = ({
   state,
   focusedRegionId,
@@ -65,33 +124,13 @@ export const HealthAssessmentView: React.FC<HealthAssessmentViewProps> = ({
 }) => {
   const { latest_telemetry: latest, assessment } = state;
 
-  const [form, setForm] = useState({
-    mission_phase: latest.mission_phase as MissionPhase,
-    gravity_g: latest.gravity_g,
-    heart_rate_bpm: latest.heart_rate_bpm,
-    systolic_bp_mmhg: latest.systolic_bp_mmhg,
-    diastolic_bp_mmhg: latest.diastolic_bp_mmhg,
-    spo2_pct: latest.spo2_pct,
-    respiratory_rate_bpm: latest.respiratory_rate_bpm ?? 16,
-    body_temp_c: latest.body_temp_c,
-    sleep_duration_hrs: latest.sleep_duration_hrs,
-    mood_score: latest.mood_score,
-    stress_level: latest.stress_level,
-    fatigue_level: latest.fatigue_level,
-    absorbed_dose_mgy: latest.absorbed_dose_mgy,
-    equivalent_dose_rate_msv_day: latest.equivalent_dose_rate_msv_day,
-    co2_mmhg: latest.co2_mmhg,
-    humidity_pct: latest.humidity_pct,
-    physical_activity_mins: latest.physical_activity_mins,
-    exercise_adherence_pct: latest.exercise_adherence_pct,
-    notes: '',
-  });
-
-  const [selectedSymptoms, setSelectedSymptoms] = useState<string[]>(
-    latest.respiratory_symptoms?.length ? latest.respiratory_symptoms : [],
-  );
+  const initial = buildFormFromTelemetry(latest);
+  const [form, setForm] = useState(initial.form);
+  const [selectedSymptoms, setSelectedSymptoms] = useState<string[]>(initial.symptoms);
+  const [advancedOpen, setAdvancedOpen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [feedbackMsg, setFeedbackMsg] = useState<string | null>(null);
+  const [submitError, setSubmitError] = useState<string | null>(null);
   const [lastSubmittedSymptoms, setLastSubmittedSymptoms] = useState<string[] | null>(null);
 
   // Daily Psychological & Sleep Check-in State
@@ -106,7 +145,14 @@ export const HealthAssessmentView: React.FC<HealthAssessmentViewProps> = ({
     concentration_workload_rating: 6,
     journal_reflection: '',
   });
-  const [psychSaved, setPsychSaved] = useState(false);
+  const [psychSavedMsg, setPsychSavedMsg] = useState<string | null>(null);
+
+  // Re-sync local draft inputs whenever database telemetry row switches (scenario load / demo reset / external update)
+  useEffect(() => {
+    const next = buildFormFromTelemetry(latest);
+    setForm(next.form);
+    setSelectedSymptoms(next.symptoms);
+  }, [latest.id, latest.mission_day, latest.timestamp]);
 
   const toggleSymptom = (sym: string) => {
     if (sym.startsWith('None')) {
@@ -127,34 +173,21 @@ export const HealthAssessmentView: React.FC<HealthAssessmentViewProps> = ({
   const loadScenario = async (scenarioId: string) => {
     setSubmitting(true);
     setFeedbackMsg(null);
+    setSubmitError(null);
     try {
-      const res = await apiRequest<{ state: FullSystemState }>(`/api/scenario/${scenarioId}`, {
+      const nextState = await apiRequest<FullSystemState>(`/api/scenario/${scenarioId}`, {
         method: 'POST',
       });
-      onStateUpdated(res.state);
-      const nl = res.state.latest_telemetry;
-      setForm((prev) => ({
-        ...prev,
-        mission_phase: nl.mission_phase,
-        gravity_g: nl.gravity_g,
-        heart_rate_bpm: nl.heart_rate_bpm,
-        systolic_bp_mmhg: nl.systolic_bp_mmhg,
-        diastolic_bp_mmhg: nl.diastolic_bp_mmhg,
-        spo2_pct: nl.spo2_pct,
-        respiratory_rate_bpm: nl.respiratory_rate_bpm ?? 16,
-        body_temp_c: nl.body_temp_c,
-        sleep_duration_hrs: nl.sleep_duration_hrs,
-        mood_score: nl.mood_score,
-        stress_level: nl.stress_level,
-        fatigue_level: nl.fatigue_level,
-        absorbed_dose_mgy: nl.absorbed_dose_mgy,
-        equivalent_dose_rate_msv_day: nl.equivalent_dose_rate_msv_day,
-        co2_mmhg: nl.co2_mmhg,
-        humidity_pct: nl.humidity_pct,
-      }));
-      setFeedbackMsg(`Loaded demo profile (${provenanceLabel(nl.provenance)}).`);
+      onStateUpdated(nextState);
+      const nextForm = buildFormFromTelemetry(nextState.latest_telemetry);
+      setForm(nextForm.form);
+      setSelectedSymptoms(nextForm.symptoms);
+      setLastSubmittedSymptoms(nextForm.symptoms);
+      setFeedbackMsg(
+        `Loaded demo scenario (${scenarioId}) at Sol ${nextState.latest_telemetry.mission_day} · ${provenanceLabel(nextState.latest_telemetry.provenance)}.`,
+      );
     } catch (err) {
-      setFeedbackMsg(err instanceof Error ? err.message : 'Unable to switch demo profile.');
+      setSubmitError(err instanceof Error ? err.message : 'Unable to switch demo scenario.');
     } finally {
       setSubmitting(false);
     }
@@ -164,22 +197,28 @@ export const HealthAssessmentView: React.FC<HealthAssessmentViewProps> = ({
     e.preventDefault();
     setSubmitting(true);
     setFeedbackMsg(null);
+    setSubmitError(null);
     try {
-      await apiRequest('/api/assessment/evaluate', {
+      const activeSyms = selectedSymptoms.filter((s) => !s.startsWith('None'));
+      const res = await apiRequest<{
+        submitted_record: FullSystemState['latest_telemetry'];
+        selected_symptoms: string[];
+        assessment: FullSystemState['assessment'];
+      }>('/api/assessment/evaluate', {
         method: 'POST',
         body: JSON.stringify({
           ...form,
-          selected_symptoms: selectedSymptoms,
+          selected_symptoms: activeSyms,
         }),
       });
       const freshState = await apiRequest<FullSystemState>('/api/state');
       onStateUpdated(freshState);
-      setLastSubmittedSymptoms(selectedSymptoms);
+      setLastSubmittedSymptoms(res.selected_symptoms || activeSyms);
       setFeedbackMsg(
-        `Assessment completed for Sol ${freshState.latest_telemetry.mission_day} (${provenanceLabel(freshState.latest_telemetry.provenance)}).`,
+        `Assessment completed for Sol ${freshState.latest_telemetry.mission_day} (${provenanceLabel(freshState.latest_telemetry.provenance)}) · Overall Status: ${res.assessment.overall_status}.`,
       );
     } catch (err) {
-      setFeedbackMsg(err instanceof Error ? err.message : 'Assessment submission failed.');
+      setSubmitError(err instanceof Error ? err.message : 'Assessment submission failed.');
     } finally {
       setSubmitting(false);
     }
@@ -188,17 +227,22 @@ export const HealthAssessmentView: React.FC<HealthAssessmentViewProps> = ({
   const submitPsychCheckin = async (e: React.FormEvent) => {
     e.preventDefault();
     setSubmitting(true);
+    setPsychSavedMsg(null);
+    setSubmitError(null);
     try {
-      await apiRequest('/api/psych-questionnaire', {
+      const nextState = await apiRequest<FullSystemState>('/api/psych-questionnaire', {
         method: 'POST',
         body: JSON.stringify({
           mission_day: latest.mission_day,
           ...psychRatings,
         }),
       });
-      const freshState = await apiRequest<FullSystemState>('/api/state');
-      onStateUpdated(freshState);
-      setPsychSaved(true);
+      onStateUpdated(nextState);
+      setPsychSavedMsg(
+        `Saved independent Behavioral & Sleep Check-In for Sol ${latest.mission_day} (visible in Health History). Telemetry vitals preserved.`,
+      );
+    } catch (err) {
+      setSubmitError(err instanceof Error ? err.message : 'Unable to save Behavioral Check-In.');
     } finally {
       setSubmitting(false);
     }
@@ -223,23 +267,30 @@ export const HealthAssessmentView: React.FC<HealthAssessmentViewProps> = ({
         <div className="flex flex-wrap items-center gap-2">
           <span className="text-xs text-[#E5E5E4]/75 mr-1">Demo Scenarios:</span>
           {[
-            { id: 'nominal', label: 'Nominal 0.38g' },
-            { id: 'spe_storm', label: 'SPE Solar Event' },
-            { id: 'co2_sleep_fatigue', label: 'CO₂ & Sleep Strain' },
-            { id: 'critical_orthostatic', label: 'Critical Orthostatic' },
+            { id: 'NOMINAL_MARS_SOL', label: 'Nominal 0.38g' },
+            { id: 'SPE_SOLAR_STORM_CRITICAL', label: 'SPE Solar Event' },
+            { id: 'ENV_CO2_CONFINEMENT_WARNING', label: 'CO₂ & Sleep Strain' },
+            { id: 'GRAVITY_ORTHOSTATIC_CRITICAL', label: 'Critical Orthostatic' },
           ].map((sc) => (
             <button
               key={sc.id}
               type="button"
               disabled={submitting}
               onClick={() => loadScenario(sc.id)}
-              className="mc-btn-secondary px-3 py-1.5 text-xs"
+              className="mc-btn-secondary px-3 py-1.5 text-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#A5D8FF]"
             >
               {sc.label}
             </button>
           ))}
         </div>
       </section>
+
+      {submitError && (
+        <div className="rounded-xl border border-red-500/35 bg-red-500/10 px-4 py-3 text-sm text-red-200 flex items-center gap-2">
+          <AlertTriangle className="w-4 h-4 text-red-300 shrink-0" />
+          <span>{submitError}</span>
+        </div>
+      )}
 
       {feedbackMsg && (
         <div className="mc-card px-4 py-3 border border-[#A5D8FF]/35 flex items-center justify-between text-sm text-[#FAF9FA]">
@@ -250,11 +301,42 @@ export const HealthAssessmentView: React.FC<HealthAssessmentViewProps> = ({
         </div>
       )}
 
+      {/* Critical Red-Flag Auto-Escalation Callout */}
+      {(assessment.auto_emergency_recommended || assessment.overall_status === 'CRITICAL') && (
+        <div className="rounded-2xl border border-red-500/45 bg-red-500/12 p-4 lg:p-5 flex flex-wrap items-center justify-between gap-4">
+          <div className="space-y-1 max-w-3xl">
+            <div className="flex items-center gap-2 text-sm font-bold text-red-300">
+              <ShieldAlert className="w-5 h-5 text-red-400 shrink-0" />
+              <span>
+                CRITICAL SAFETY ALERT · {assessment.recommended_emergency_hazard || 'Immediate Medical Triage Required'}
+              </span>
+            </div>
+            <p className="text-xs text-[#FAF9FA]/90 leading-relaxed">
+              {assessment.recommendations?.[0]?.action ||
+                'Critical excursion detected outside personal baseline. Stop exertion, notify Crew Medical Officer, and launch autonomous checklist.'}
+            </p>
+            {assessment.protocol_gap_notice && (
+              <p className="text-xs text-amber-200/90 leading-relaxed">
+                {assessment.protocol_gap_notice}
+              </p>
+            )}
+          </div>
+          <button
+            type="button"
+            onClick={() => onOpenEmergency(assessment.recommended_emergency_hazard || undefined)}
+            className="px-4 py-2.5 rounded-full bg-red-500 hover:bg-red-400 text-white text-xs font-bold inline-flex items-center gap-2 shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white"
+          >
+            <ShieldAlert className="w-4 h-4" />
+            <span>Launch Emergency Checklist</span>
+          </button>
+        </div>
+      )}
+
       {/* Dual-Method Assessment Form: Method 1 (Measurements) + Method 2 (Symptoms) */}
       <form onSubmit={submitAssessment} className="grid grid-cols-1 xl:grid-cols-2 gap-6">
         {/* Method 1: Manual Measurement Input */}
         <div className="mc-card p-5 lg:p-6 space-y-5">
-          <div className="flex items-center justify-between gap-2">
+          <div className="flex flex-wrap items-center justify-between gap-2">
             <div>
               <h2 className="text-lg font-semibold text-[#FAF9FA]">Method 1: Manual Measurements</h2>
               <p className="text-xs text-[#E5E5E4]/75 mt-0.5">
@@ -288,38 +370,108 @@ export const HealthAssessmentView: React.FC<HealthAssessmentViewProps> = ({
               { key: 'systolic_bp_mmhg', label: 'Systolic BP (mmHg)', step: 'any', min: 70, max: 210 },
               { key: 'diastolic_bp_mmhg', label: 'Diastolic BP (mmHg)', step: 'any', min: 45, max: 130 },
               { key: 'spo2_pct', label: 'SpO₂ (%)', step: 'any', min: 75, max: 100 },
-              { key: 'respiratory_rate_bpm', label: 'Resp. Rate (/min)', step: 'any', min: 8, max: 40 },
+              { key: 'respiratory_rate_bpm', label: 'Resp. Rate (/min)', step: 'any', min: 8, max: 45 },
               { key: 'body_temp_c', label: 'Body Temp (°C)', step: 'any', min: 34.5, max: 41.5 },
               { key: 'sleep_duration_hrs', label: 'Sleep (hrs)', step: 'any', min: 1, max: 12 },
               { key: 'mood_score', label: 'Mood (/10)', step: 'any', min: 1, max: 10 },
               { key: 'stress_level', label: 'Stress (/10)', step: 'any', min: 1, max: 10 },
-              { key: 'absorbed_dose_mgy', label: 'Absorbed Dose (mGy)', step: 'any', min: 0, max: 250 },
-              { key: 'equivalent_dose_rate_msv_day', label: 'Equiv. Rate (mSv/d)', step: 'any', min: 0, max: 100 },
+              { key: 'absorbed_dose_mgy', label: 'Absorbed Dose (mGy)', step: 'any', min: 0, max: 500 },
+              { key: 'equivalent_dose_rate_msv_day', label: 'Equiv. Rate (mSv/d)', step: 'any', min: 0, max: 250 },
               { key: 'co2_mmhg', label: 'Cabin CO₂ (mmHg)', step: 'any', min: 0.5, max: 12 },
             ].map((fld) => (
-              <label key={fld.key} className="block">
+              <label key={fld.key} htmlFor={`assess-${fld.key}`} className="block">
                 <span className="text-xs text-[#E5E5E4]/85 block mb-1">{fld.label}</span>
                 <input
+                  id={`assess-${fld.key}`}
+                  name={fld.key}
                   type="number"
                   step={fld.step}
                   min={fld.min}
                   max={fld.max}
                   value={(form as Record<string, any>)[fld.key]}
-                  onChange={(e) =>
+                  onChange={(e) => {
+                    const parsed = parseFloat(e.target.value);
                     setForm((prev) => ({
                       ...prev,
-                      [fld.key]: parseFloat(e.target.value) || 0,
-                    }))
-                  }
+                      [fld.key]: Number.isFinite(parsed) ? parsed : 0,
+                    }));
+                  }}
                   className="w-full rounded-xl bg-[#0B0D1A] border border-white/10 px-3 py-2 text-sm text-[#FAF9FA] tabular-data focus:border-[#A5D8FF] focus:outline-none"
                 />
               </label>
             ))}
           </div>
 
-          <label className="block">
+          {/* Expandable Extended ECLSS, Behavioral Quality, MSK & Radiation Fields */}
+          <div className="rounded-xl border border-white/10 bg-[#0B0D1A]/70 p-3.5">
+            <button
+              type="button"
+              onClick={() => setAdvancedOpen((v) => !v)}
+              className="w-full flex items-center justify-between text-xs font-semibold text-[#A5D8FF]"
+            >
+              <span>Extended ECLSS, Behavioral Quality, MSK &amp; Radiation Inputs</span>
+              {advancedOpen ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+            </button>
+            {advancedOpen && (
+              <div className="mt-3.5 grid grid-cols-2 sm:grid-cols-3 gap-3">
+                {[
+                  { key: 'fatigue_level', label: 'Fatigue (/10)', min: 1, max: 10 },
+                  { key: 'sleep_quality_pct', label: 'Sleep Quality (%)', min: 10, max: 100 },
+                  { key: 'social_interaction_score', label: 'Social Interaction (/10)', min: 1, max: 10 },
+                  { key: 'cabin_temp_c', label: 'Cabin Temp (°C)', min: 12, max: 35 },
+                  { key: 'humidity_pct', label: 'Cabin Humidity (%)', min: 10, max: 90 },
+                  { key: 'oxygen_pct', label: 'Cabin O₂ (%)', min: 15, max: 25 },
+                  { key: 'air_quality_index', label: 'Air Quality (AQI)', min: 0, max: 500 },
+                  { key: 'exercise_performance_pct', label: 'Exercise Perf (%)', min: 0, max: 120 },
+                  { key: 'muscle_strength_idx', label: 'Muscle Strength', min: 40, max: 120 },
+                  { key: 'balance_score', label: 'Balance Score (/100)', min: 20, max: 100 },
+                  { key: 'dizziness_severity', label: 'Dizziness Grade (0-3)', min: 0, max: 3 },
+                ].map((fld) => (
+                  <label key={fld.key} htmlFor={`adv-${fld.key}`} className="block">
+                    <span className="text-[11px] text-[#E5E5E4]/80 block mb-1">{fld.label}</span>
+                    <input
+                      id={`adv-${fld.key}`}
+                      name={fld.key}
+                      type="number"
+                      step="any"
+                      min={fld.min}
+                      max={fld.max}
+                      value={(form as Record<string, any>)[fld.key]}
+                      onChange={(e) => {
+                        const parsed = parseFloat(e.target.value);
+                        setForm((prev) => ({
+                          ...prev,
+                          [fld.key]: Number.isFinite(parsed) ? parsed : 0,
+                        }));
+                      }}
+                      className="w-full rounded-lg bg-[#121522] border border-white/10 px-2.5 py-1.5 text-xs text-[#FAF9FA] tabular-data focus:border-[#A5D8FF] focus:outline-none"
+                    />
+                  </label>
+                ))}
+                <label htmlFor="adv-rad-event" className="block col-span-2 sm:col-span-3">
+                  <span className="text-[11px] text-[#E5E5E4]/80 block mb-1">Radiation Event Type</span>
+                  <select
+                    id="adv-rad-event"
+                    name="radiation_event_type"
+                    value={form.radiation_event_type}
+                    onChange={(e) => setForm((prev) => ({ ...prev, radiation_event_type: e.target.value }))}
+                    className="w-full rounded-lg bg-[#121522] border border-white/10 px-2.5 py-1.5 text-xs text-[#FAF9FA] focus:border-[#A5D8FF] focus:outline-none"
+                  >
+                    <option value="GCR_MARS_SHIELDED">GCR_MARS_SHIELDED (Nominal Background)</option>
+                    <option value="GCR_BACKGROUND">GCR_BACKGROUND (Interplanetary Transit)</option>
+                    <option value="SOLAR_FLARE_MINOR">SOLAR_FLARE_MINOR (Elevated Proton Flux)</option>
+                    <option value="SPE_SOLAR_STORM">SPE_SOLAR_STORM (Solar Particle Event)</option>
+                  </select>
+                </label>
+              </div>
+            )}
+          </div>
+
+          <label htmlFor="assess-notes" className="block">
             <span className="text-xs text-[#E5E5E4]/85 block mb-1">Optional Crew Observation Notes</span>
             <input
+              id="assess-notes"
+              name="assessment_notes"
               type="text"
               placeholder="e.g., After surface EVA, noticed dry throat inside airlock..."
               value={form.notes}
@@ -393,11 +545,11 @@ export const HealthAssessmentView: React.FC<HealthAssessmentViewProps> = ({
             <div>
               <h2 className="text-lg font-semibold text-[#FAF9FA]">Behavioral, Stress &amp; Sleep Check-In</h2>
               <p className="text-xs text-[#E5E5E4]/75">
-                Private reflection &amp; trend tracking — never performs psychiatric diagnosis.
+                Private reflection &amp; trend tracking — never duplicates telemetry or performs psychiatric diagnosis.
               </p>
             </div>
-            {psychSaved && (
-              <span className="text-xs font-medium text-[#A5D8FF]">Check-in saved locally</span>
+            {psychSavedMsg && (
+              <span className="text-xs font-medium text-emerald-300">{psychSavedMsg}</span>
             )}
           </div>
 
@@ -411,7 +563,7 @@ export const HealthAssessmentView: React.FC<HealthAssessmentViewProps> = ({
               { key: 'isolation_feeling_rating', label: 'Feeling Isolated (1-10)' },
               { key: 'concentration_workload_rating', label: 'Workload Strain (1-10)' },
             ].map((item) => (
-              <label key={item.key} className="rounded-xl bg-[#0B0D1A] p-3 block">
+              <label key={item.key} htmlFor={`psych-${item.key}`} className="rounded-xl bg-[#0B0D1A] p-3 block">
                 <div className="flex justify-between text-xs text-[#E5E5E4] mb-1.5">
                   <span>{item.label}</span>
                   <strong className="text-[#A5D8FF] tabular-data">
@@ -419,6 +571,8 @@ export const HealthAssessmentView: React.FC<HealthAssessmentViewProps> = ({
                   </strong>
                 </div>
                 <input
+                  id={`psych-${item.key}`}
+                  name={item.key}
                   type="range"
                   min={1}
                   max={10}
@@ -437,8 +591,10 @@ export const HealthAssessmentView: React.FC<HealthAssessmentViewProps> = ({
 
           <div className="flex flex-wrap items-center gap-3">
             <input
+              id="psych-journal-reflection"
+              name="journal_reflection"
               type="text"
-              placeholder="Private journal reflection (e.g., sleep schedule, crew morale, light routine)..."
+              placeholder="Private journal reflection (stored locally in SQLite check-in log)..."
               value={psychRatings.journal_reflection}
               onChange={(e) =>
                 setPsychRatings((prev) => ({ ...prev, journal_reflection: e.target.value }))
@@ -470,14 +626,19 @@ export const HealthAssessmentView: React.FC<HealthAssessmentViewProps> = ({
             </div>
           </div>
 
-          <div className="flex items-center gap-2.5">
+          <div className="flex flex-wrap items-center gap-2.5">
+            {assessment.exercise_contraindicated && (
+              <span className="px-3 py-1 rounded-full text-xs font-semibold border border-red-500/35 bg-red-500/15 text-red-300">
+                Exercise Hold Active
+              </span>
+            )}
             <span className={`px-3.5 py-1 rounded-full text-sm font-semibold ${overallMeta.badgeClass}`}>
               {overallMeta.label}
             </span>
             {assessment.overall_status !== 'NORMAL' && (
               <button
                 type="button"
-                onClick={onOpenEmergency}
+                onClick={() => onOpenEmergency(assessment.recommended_emergency_hazard || undefined)}
                 className="mc-btn-secondary px-4 py-1.5 text-xs inline-flex items-center gap-1.5"
               >
                 <ShieldAlert className="w-3.5 h-3.5 text-amber-300" />

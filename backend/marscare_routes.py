@@ -110,18 +110,39 @@ def initialize_marscare_rag() -> None:
 
     def _enrich_context_if_sparse(ctx: Optional[Dict[str, Any]]) -> Dict[str, Any]:
         enriched = dict(ctx or {})
-        if "latest_telemetry" not in enriched:
-            history = database.fetch_all_telemetry()
-            if history:
-                latest = history[-1]
-                baseline = database.fetch_system_state("baseline") or {}
-                enriched.setdefault("astronaut_name", baseline.get("name", "SuChai"))
+        history = database.fetch_all_telemetry()
+        baseline_raw = database.fetch_system_state("baseline") or {}
+        if history:
+            latest = history[-1]
+            if "latest_telemetry" not in enriched:
+                enriched.setdefault("astronaut_name", baseline_raw.get("name", "SuChai"))
                 enriched.setdefault("mission_day", latest.get("mission_day"))
                 enriched.setdefault("mission_phase", latest.get("mission_phase"))
                 enriched.setdefault("gravity_g", latest.get("gravity_g"))
                 enriched.setdefault("provenance", latest.get("provenance", "SYNTHETIC_DEMO"))
                 enriched["latest_telemetry"] = latest
-                enriched["baseline"] = baseline
+                enriched["baseline"] = baseline_raw
+            if "hazard_statuses" not in enriched or "overall_status" not in enriched:
+                try:
+                    rad_limits = RadiationConfigLimits(**(database.fetch_system_state("rad_limits") or {}))
+                    env_limits = EnvironmentalConfigLimits(**(database.fetch_system_state("env_limits") or {}))
+                    comm_state = database.fetch_system_state("comm_state") or {}
+                    psych_list = database.fetch_psych_questionnaires()
+                    eval_res = evaluate_integrated_health(
+                        latest,
+                        history,
+                        AstronautBaseline(**baseline_raw),
+                        rad_limits,
+                        env_limits,
+                        comm_state,
+                        latest_psych=psych_list[0] if psych_list else None,
+                        skip_rag=True,
+                    )
+                    enriched["overall_status"] = eval_res["overall_status"]
+                    enriched["hazard_statuses"] = eval_res["hazard_statuses"]
+                    enriched["active_alerts"] = eval_res["active_alerts"]
+                except Exception:
+                    pass
         return enriched
 
     def hybrid_answer_question(
@@ -136,13 +157,70 @@ def initialize_marscare_rag() -> None:
             wait_for_embeddings=allow_llm,
         )
         ai_status = get_local_ai_status()
-        threshold = 0.24 if used_dense else 0.12
-        sufficient_evidence = len(citations) > 0 and citations[0]["relevance_score"] >= threshold
+        threshold = 0.25 if used_dense else 0.14
+
+        q_tokens = knowledge_base._tokenize(question)
+        mission_filler = {
+            "mars", "space", "spaceflight", "astronaut", "astronauts", "crew", "mission", "system",
+            "perform", "performing", "treat", "treating", "make", "making", "take", "taking",
+            "using", "help", "tell", "give", "work", "happen", "happens", "could", "would",
+            "should", "about", "between", "during", "current", "status", "report", "explain", "describe",
+        }
+        domain_terms = [t for t in q_tokens if t not in mission_filler]
+        top_tokens = set()
+        for cit in citations[:3]:
+            top_tokens.update(knowledge_base._tokenize(f"{cit.get('title', '')} {cit.get('excerpt', '')}"))
+        domain_matches = 0
+        for dt in domain_terms:
+            if dt in top_tokens or (len(dt) >= 5 and any(ct.startswith(dt[:5]) or dt.startswith(ct[:5]) for ct in top_tokens)):
+                domain_matches += 1
+
+        min_matches = 2 if len(domain_terms) >= 4 else 1
+        top_score = citations[0]["relevance_score"] if citations else 0.0
+        sufficient_evidence = (
+            len(citations) > 0
+            and top_score >= threshold
+            and (not domain_terms or domain_matches >= min_matches)
+        )
 
         ql = question.lower()
+        surgical_oos_terms = (
+            "surgery", "surgical", "laparoscopic", "appendicitis", "appendectomy",
+            "anesthesia", "intubat", "sutur", "amputat", "cesarean", "transplant", "chemotherapy",
+        )
+        if any(w in ql for w in surgical_oos_terms):
+            return {
+                "query": question,
+                "engine_mode": ai_status["active_engine_mode"],
+                "model_used": None,
+                "latency_ms": 0,
+                "sufficient_evidence": False,
+                "conflict_notice": None,
+                "scientific_evidence": [],
+                "operational_procedures": [
+                    {
+                        "doc_id": "TARSCARE-SPEC-01",
+                        "title": "Out-of-Scope Invasive / Surgical Procedure Limitation",
+                        "agency": "TARSCARE Operational Layer",
+                        "year": "2026",
+                        "excerpt": "TARSCARE is not a surgical manual or clinical intervention guide; escalate acute abdominal/surgical emergencies to the Crew Medical Officer and Flight Surgeons.",
+                        "provenance": "SYSTEM_OPERATIONAL_SPEC",
+                    }
+                ],
+                "answer": (
+                    "Insufficient evidence and out-of-scope clinical procedure request: TARSCARE does not contain "
+                    "surgical manuals, operative protocols, or invasive clinical instructions (such as abdominal or laparoscopic surgery). "
+                    "Contact your onboard Crew Medical Officer immediately and consult NASA Medical Operations / Earth Flight Surgeons."
+                ),
+                "safety_notice": (
+                    "Capability boundary: TARSCARE is limited to indexed NASA/CSA spaceflight research and baseline triage, not surgical or acute operative care."
+                ),
+                "citations": citations[:3],
+            }
         med_terms = (
             "prescribe", "prescription", "dosage", "dose of ", "antibiotic",
-            "amoxicillin", "ibuprofen", "acetaminophen", "medication",
+            "amoxicillin", "azithromycin", "ciprofloxacin", "ibuprofen",
+            "acetaminophen", "paracetamol", "medication", "painkiller",
         )
         if any(w in ql for w in med_terms):
             return {
@@ -151,6 +229,18 @@ def initialize_marscare_rag() -> None:
                 "model_used": None,
                 "latency_ms": 0,
                 "sufficient_evidence": False,
+                "conflict_notice": None,
+                "scientific_evidence": [],
+                "operational_procedures": [
+                    {
+                        "doc_id": "TARSCARE-SPEC-01",
+                        "title": "Medication & Clinical Prescribing Prohibition",
+                        "agency": "TARSCARE Operational Layer",
+                        "year": "2026",
+                        "excerpt": "TARSCARE never recommends drug dosages or prescriptions; refer to onboard CMO Medical Operations Kit and Earth Flight Surgeons.",
+                        "provenance": "SYSTEM_OPERATIONAL_SPEC",
+                    }
+                ],
                 "answer": (
                     "Insufficient evidence and out-of-scope clinical request: TARSCARE is an autonomous "
                     "educational and health-monitoring companion built on NASA/CSA spaceflight research references. "
@@ -173,19 +263,28 @@ def initialize_marscare_rag() -> None:
             res["latency_ms"] = 0
             return res
 
+        rich_ctx = _enrich_context_if_sparse(astronaut_context) if allow_llm else (astronaut_context or {})
+        conflict_notice = knowledge_base.rag_engine.detect_conflicts(question, citations, rich_ctx)
+        sci_evidence, op_procedures = knowledge_base.rag_engine.split_evidence_and_procedures(citations, rich_ctx)
+
         if allow_llm and ai_status["llm_active"] and citations:
-            rich_ctx = _enrich_context_if_sparse(astronaut_context)
             synth = synthesize_with_ollama(question, citations, rich_ctx)
             if synth:
+                answer_text = synth["answer"]
+                if conflict_notice and "conflict notice" not in answer_text.lower() and "regime" not in answer_text.lower():
+                    answer_text = f"{answer_text}\n\nSource & Regime Conflict Notice: {conflict_notice}"
                 return {
                     "query": question,
                     "engine_mode": ai_status["active_engine_mode"],
                     "model_used": synth["model"],
                     "latency_ms": synth["latency_ms"],
                     "sufficient_evidence": True,
-                    "answer": synth["answer"],
+                    "conflict_notice": conflict_notice,
+                    "scientific_evidence": sci_evidence,
+                    "operational_procedures": op_procedures,
+                    "answer": answer_text,
                     "safety_notice": (
-                        "Non-diagnostic evidence summary synthesized locally via Ollama from stored NASA HRP & CSA references. "
+                        "Non-diagnostic evidence summary synthesized locally via Ollama from stored NASA HRP, CSA & operational references. "
                         "Prototype decision rules are not clinically validated."
                     ),
                     "citations": citations[:3],
@@ -199,8 +298,9 @@ def initialize_marscare_rag() -> None:
         res = knowledge_base.rag_engine.build_deterministic_answer(
             question,
             citations,
-            astronaut_context=astronaut_context,
+            astronaut_context=rich_ctx,
             engine_mode=det_mode,
+            conflict_notice=conflict_notice,
         )
         res["model_used"] = None
         res["latency_ms"] = 0
@@ -220,16 +320,31 @@ class CombinedAssessmentRequest(BaseModel):
     respiratory_rate_bpm: Optional[float] = None
     body_temp_c: Optional[float] = None
     sleep_duration_hrs: Optional[float] = None
+    sleep_quality_pct: Optional[float] = None
     mood_score: Optional[float] = None
     stress_level: Optional[float] = None
     fatigue_level: Optional[float] = None
     workload_score: Optional[float] = None
+    social_interaction_score: Optional[float] = None
     absorbed_dose_mgy: Optional[float] = None
+    absorbed_dose_rate_mgy_hr: Optional[float] = None
     equivalent_dose_rate_msv_day: Optional[float] = None
+    radiation_event_type: Optional[str] = None
     co2_mmhg: Optional[float] = None
+    cabin_temp_c: Optional[float] = None
+    cabin_pressure_kpa: Optional[float] = None
+    oxygen_pct: Optional[float] = None
     humidity_pct: Optional[float] = None
+    air_quality_index: Optional[float] = None
     physical_activity_mins: Optional[float] = None
+    exercise_performance_pct: Optional[float] = None
+    muscle_strength_idx: Optional[float] = None
     exercise_adherence_pct: Optional[float] = None
+    balance_score: Optional[float] = None
+    dizziness_severity: Optional[int] = None
+    chest_discomfort: Optional[bool] = None
+    palpitations: Optional[bool] = None
+    shortness_of_breath: Optional[bool] = None
     selected_symptoms: List[str] = Field(default_factory=list)
     notes: str = ""
 
@@ -336,7 +451,10 @@ def api_generate_report(req: ReportGenerateRequest) -> Dict[str, Any]:
     rad_limits = RadiationConfigLimits(**(database.fetch_system_state("rad_limits") or {}))
     env_limits = EnvironmentalConfigLimits(**(database.fetch_system_state("env_limits") or {}))
     comm_state = database.fetch_system_state("comm_state") or {}
-    assessment = evaluate_integrated_health(latest, history, baseline, rad_limits, env_limits, comm_state)
+    psych_list = database.fetch_psych_questionnaires()
+    assessment = evaluate_integrated_health(
+        latest, history, baseline, rad_limits, env_limits, comm_state, latest_psych=psych_list[0] if psych_list else None
+    )
     comm_norm = normalize_comm_mode(comm_state)
     is_direct = comm_norm["mode"] == "CONNECTED"
     title = req.title or f"Sol {latest['mission_day']} TARSCARE Autonomous Health Summary"
@@ -377,20 +495,36 @@ def api_submit_combined_assessment(req: CombinedAssessmentRequest) -> Dict[str, 
         elif any(k in sl for k in ("fever", "chill", "rash", "sinus", "infection")):
             inf_symptoms.append(sym)
 
-    dizziness = 2 if any("dizz" in s for s in symptom_set) else (1 if latest.get("dizziness_severity", 0) > 0 and "none" not in symptom_set else 0)
+    chest_disc = bool(req.chest_discomfort) if req.chest_discomfort is not None else any("chest" in s for s in symptom_set)
+    palpit = bool(req.palpitations) if req.palpitations is not None else any("palpitation" in s for s in symptom_set)
+    short_breath = bool(req.shortness_of_breath) if req.shortness_of_breath is not None else any(
+        ("shortness" in s or "dyspnea" in s or "breath" in s) for s in symptom_set
+    )
+
+    dizziness = (
+        req.dizziness_severity
+        if req.dizziness_severity is not None
+        else (2 if any("dizz" in s for s in symptom_set) else 0)
+    )
     faintness = any("faint" in s or "presyncope" in s for s in symptom_set)
-    visual_sans = any("vision" in s or "blur" in s or "eye" in s for s in symptom_set)
+    visual_sans = any("vision" in s or "blur" in s or "eye" in s or "visual" in s for s in symptom_set)
     spatial_dis = any("balance" in s or "disorient" in s or "vertigo" in s for s in symptom_set)
-    isolated = any("isolat" in s or "lonely" in s for s in symptom_set)
+    isolated = any("isolat" in s or "lonely" in s or "withdrawn" in s for s in symptom_set)
     conc_diff = any("focus" in s or "concentrat" in s or "brain fog" in s or "headache" in s for s in symptom_set)
     musc_disc = 2 if any("muscle" in s or "joint" in s or "back pain" in s for s in symptom_set) else 0
 
     phase = req.mission_phase or latest["mission_phase"]
-    grav = req.gravity_g if req.gravity_g is not None else (0.0 if phase == MissionPhase.MICROGRAVITY_TRANSIT.value else (1.0 if phase == MissionPhase.EARTH_RETURN.value else 0.38))
+    grav = (
+        req.gravity_g
+        if req.gravity_g is not None
+        else (0.0 if phase == MissionPhase.MICROGRAVITY_TRANSIT.value else (1.0 if phase == MissionPhase.EARTH_RETURN.value else 0.38))
+    )
 
     eq_rate = req.equivalent_dose_rate_msv_day if req.equivalent_dose_rate_msv_day is not None else latest["equivalent_dose_rate_msv_day"]
-    abs_dose = req.absorbed_dose_mgy if req.absorbed_dose_mgy is not None else round(eq_rate * 0.4, 2)
+    abs_dose = req.absorbed_dose_mgy if req.absorbed_dose_mgy is not None else round(float(eq_rate) * 0.4, 2)
+    abs_rate = req.absorbed_dose_rate_mgy_hr if req.absorbed_dose_rate_mgy_hr is not None else round(float(abs_dose) / 24.0, 4)
     cum_msv = round(float(latest["cumulative_effective_dose_msv"]) + float(eq_rate), 2)
+    co2_mmhg = req.co2_mmhg if req.co2_mmhg is not None else latest["co2_mmhg"]
 
     sub = HealthMeasurementSubmission(
         mission_day=req.mission_day or (int(latest["mission_day"]) + 1),
@@ -398,22 +532,30 @@ def api_submit_combined_assessment(req: CombinedAssessmentRequest) -> Dict[str, 
         gravity_g=grav,
         provenance=DataProvenance.USER_ENTERED,
         absorbed_dose_mgy=abs_dose,
-        absorbed_dose_rate_mgy_hr=round(abs_dose / 24.0, 4),
+        absorbed_dose_rate_mgy_hr=abs_rate,
         equivalent_dose_msv=eq_rate,
         equivalent_dose_rate_msv_day=eq_rate,
         cumulative_effective_dose_msv=cum_msv,
         radiation_source="MANUAL_CREW_CHECK_IN",
-        radiation_event_type=latest.get("radiation_event_type", "GCR_MARS_SHIELDED"),
-        mood_score=req.mood_score if req.mood_score is not None else (5.5 if "low mood" in symptom_set else latest["mood_score"]),
-        stress_level=req.stress_level if req.stress_level is not None else (7.0 if "anxious / stressed" in symptom_set else latest["stress_level"]),
+        radiation_event_type=req.radiation_event_type or latest.get("radiation_event_type", "GCR_MARS_SHIELDED"),
+        mood_score=req.mood_score if req.mood_score is not None else (4.0 if any("low mood" in s for s in symptom_set) else latest["mood_score"]),
+        stress_level=req.stress_level if req.stress_level is not None else (7.5 if any("anxious" in s or "stressed" in s for s in symptom_set) else latest["stress_level"]),
         emotional_wellbeing=latest.get("emotional_wellbeing", 7.0),
-        fatigue_level=req.fatigue_level if req.fatigue_level is not None else (7.5 if "severe fatigue" in symptom_set else latest["fatigue_level"]),
+        fatigue_level=req.fatigue_level if req.fatigue_level is not None else (8.0 if any("fatigue" in s for s in symptom_set) else latest["fatigue_level"]),
         workload_score=req.workload_score if req.workload_score is not None else latest["workload_score"],
-        social_interaction_score=latest.get("social_interaction_score", 7.0),
-        sleep_duration_hrs=req.sleep_duration_hrs if req.sleep_duration_hrs is not None else (5.0 if "insomnia / poor sleep" in symptom_set else latest["sleep_duration_hrs"]),
-        sleep_quality_pct=latest.get("sleep_quality_pct", 78.0),
+        social_interaction_score=(
+            req.social_interaction_score
+            if req.social_interaction_score is not None
+            else (3.5 if isolated else latest.get("social_interaction_score", 7.0))
+        ),
+        sleep_duration_hrs=req.sleep_duration_hrs if req.sleep_duration_hrs is not None else (5.0 if any("insomnia" in s or "poor sleep" in s for s in symptom_set) else latest["sleep_duration_hrs"]),
+        sleep_quality_pct=(
+            req.sleep_quality_pct
+            if req.sleep_quality_pct is not None
+            else (48.0 if any("insomnia" in s or "poor sleep" in s for s in symptom_set) else latest.get("sleep_quality_pct", 78.0))
+        ),
         sleep_schedule_window=latest.get("sleep_schedule_window", "22:30 - 05:30 UTC-MARS"),
-        sleep_irregularities=3 if "insomnia / poor sleep" in symptom_set else latest.get("sleep_irregularities", 1),
+        sleep_irregularities=3 if any("insomnia" in s or "poor sleep" in s for s in symptom_set) else 0,
         feeling_isolated=isolated,
         concentration_difficulty=conc_diff,
         motivation_level=latest.get("motivation_level", 7.5),
@@ -422,25 +564,29 @@ def api_submit_combined_assessment(req: CombinedAssessmentRequest) -> Dict[str, 
         diastolic_bp_mmhg=req.diastolic_bp_mmhg if req.diastolic_bp_mmhg is not None else latest["diastolic_bp_mmhg"],
         spo2_pct=req.spo2_pct if req.spo2_pct is not None else latest["spo2_pct"],
         respiratory_rate_bpm=req.respiratory_rate_bpm if req.respiratory_rate_bpm is not None else latest.get("respiratory_rate_bpm", 16.0),
-        body_temp_c=req.body_temp_c if req.body_temp_c is not None else (38.1 if "feverish / chills" in symptom_set else latest["body_temp_c"]),
+        body_temp_c=req.body_temp_c if req.body_temp_c is not None else (38.1 if any("fever" in s or "chill" in s for s in symptom_set) else latest["body_temp_c"]),
         dizziness_severity=dizziness,
         faintness_presyncope=faintness,
+        chest_discomfort=chest_disc,
+        palpitations=palpit,
+        shortness_of_breath=short_breath,
+        reported_symptoms=req.selected_symptoms,
         physical_activity_mins=req.physical_activity_mins if req.physical_activity_mins is not None else latest["physical_activity_mins"],
-        exercise_performance_pct=latest.get("exercise_performance_pct", 90.0),
-        muscle_strength_idx=latest.get("muscle_strength_idx", 92.0),
+        exercise_performance_pct=req.exercise_performance_pct if req.exercise_performance_pct is not None else latest.get("exercise_performance_pct", 90.0),
+        muscle_strength_idx=req.muscle_strength_idx if req.muscle_strength_idx is not None else latest.get("muscle_strength_idx", 92.0),
         exercise_adherence_pct=req.exercise_adherence_pct if req.exercise_adherence_pct is not None else latest["exercise_adherence_pct"],
         musculoskeletal_discomfort=musc_disc,
-        balance_score=74.0 if spatial_dis else latest.get("balance_score", 85.0),
+        balance_score=req.balance_score if req.balance_score is not None else (74.0 if spatial_dis else latest.get("balance_score", 85.0)),
         coordination_score=latest.get("coordination_score", 88.0),
         spatial_disorientation=spatial_dis,
         visual_disturbance_sans=visual_sans,
-        cabin_temp_c=latest.get("cabin_temp_c", 21.6),
-        cabin_pressure_kpa=latest.get("cabin_pressure_kpa", 70.3),
-        oxygen_pct=latest.get("oxygen_pct", 21.1),
-        co2_mmhg=req.co2_mmhg if req.co2_mmhg is not None else latest["co2_mmhg"],
-        co2_ppm=round((req.co2_mmhg if req.co2_mmhg is not None else latest["co2_mmhg"]) * 1315.0, 0),
+        cabin_temp_c=req.cabin_temp_c if req.cabin_temp_c is not None else latest.get("cabin_temp_c", 21.6),
+        cabin_pressure_kpa=req.cabin_pressure_kpa if req.cabin_pressure_kpa is not None else latest.get("cabin_pressure_kpa", 70.3),
+        oxygen_pct=req.oxygen_pct if req.oxygen_pct is not None else latest.get("oxygen_pct", 21.1),
+        co2_mmhg=co2_mmhg,
+        co2_ppm=round(float(co2_mmhg) * 1315.0, 0),
         humidity_pct=req.humidity_pct if req.humidity_pct is not None else latest["humidity_pct"],
-        air_quality_index=latest.get("air_quality_index", 35.0),
+        air_quality_index=req.air_quality_index if req.air_quality_index is not None else latest.get("air_quality_index", 35.0),
         env_warning_event=latest.get("env_warning_event", "NONE"),
         respiratory_symptoms=resp_symptoms,
         infection_symptoms=inf_symptoms,
@@ -454,7 +600,16 @@ def api_submit_combined_assessment(req: CombinedAssessmentRequest) -> Dict[str, 
     rad_limits = RadiationConfigLimits(**(database.fetch_system_state("rad_limits") or {}))
     env_limits = EnvironmentalConfigLimits(**(database.fetch_system_state("env_limits") or {}))
     comm_state = database.fetch_system_state("comm_state") or {}
-    assessment = evaluate_integrated_health(inserted, updated_history, baseline, rad_limits, env_limits, comm_state)
+    psych_list = database.fetch_psych_questionnaires()
+    assessment = evaluate_integrated_health(
+        inserted,
+        updated_history,
+        baseline,
+        rad_limits,
+        env_limits,
+        comm_state,
+        latest_psych=psych_list[0] if psych_list else None,
+    )
 
     if assessment["overall_status"] in ("WARNING", "CRITICAL"):
         comm_norm = normalize_comm_mode(comm_state)

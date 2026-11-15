@@ -1,18 +1,22 @@
 import React, { useMemo, useState } from 'react';
 import {
+  AlertTriangle,
   CheckCircle2,
   Cpu,
   Download,
+  Eye,
+  EyeOff,
   FileText,
   RefreshCw,
   ShieldAlert,
   Wifi,
   WifiOff,
 } from 'lucide-react';
-import { FullSystemState } from '../types';
+import { FullSystemState, SyncResponse } from '../types';
 import {
   apiRequest,
   formatRecordedTime,
+  gravityRegimeLabel,
   provenanceLabel,
   statusMeta,
   updateLocalAIConfig,
@@ -28,6 +32,8 @@ export const HealthHistoryView: React.FC<HistoryProps> = ({ state, onStateUpdate
   const [daysWindow, setDaysWindow] = useState<7 | 14 | 30>(30);
   const [provFilter, setProvFilter] = useState<'ALL' | 'SIMULATED' | 'USER'>('ALL');
   const [creatingReport, setCreatingReport] = useState(false);
+  const [historyNotice, setHistoryNotice] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null);
+  const [showJournals, setShowJournals] = useState(false);
 
   const filteredRecords = useMemo(() => {
     const sliced = state.telemetry_history.slice(-daysWindow).reverse();
@@ -48,6 +54,12 @@ export const HealthHistoryView: React.FC<HistoryProps> = ({ state, onStateUpdate
           r.sleep_duration_hrs <= 6.2 ||
           r.co2_mmhg >= 3.0 ||
           r.dizziness_severity >= 1 ||
+          r.heart_rate_bpm >= 110 ||
+          r.spo2_pct <= 93 ||
+          r.chest_discomfort ||
+          r.palpitations ||
+          r.shortness_of_breath ||
+          (r.reported_symptoms && r.reported_symptoms.length > 0) ||
           r.respiratory_symptoms.length > 0,
       )
       .map((r) => ({
@@ -56,6 +68,11 @@ export const HealthHistoryView: React.FC<HistoryProps> = ({ state, onStateUpdate
         provenance: provenanceLabel(r.provenance),
         notes: r.notes,
         badges: [
+          r.chest_discomfort ? 'Chest Discomfort' : null,
+          r.palpitations ? 'Palpitations' : null,
+          r.shortness_of_breath ? 'Shortness of Breath' : null,
+          r.heart_rate_bpm >= 110 ? `HR ${Math.round(r.heart_rate_bpm)} BPM` : null,
+          r.spo2_pct <= 93 ? `SpO₂ ${r.spo2_pct.toFixed(1)}%` : null,
           r.equivalent_dose_rate_msv_day >= 1.5 ? `Radiation ${r.equivalent_dose_rate_msv_day} mSv/d` : null,
           r.sleep_duration_hrs <= 6.2 ? `Low Sleep ${r.sleep_duration_hrs}h` : null,
           r.co2_mmhg >= 3.0 ? `CO₂ ${r.co2_mmhg} mmHg` : null,
@@ -66,6 +83,7 @@ export const HealthHistoryView: React.FC<HistoryProps> = ({ state, onStateUpdate
 
   const generateReport = async () => {
     setCreatingReport(true);
+    setHistoryNotice(null);
     try {
       await apiRequest('/api/reports/generate', {
         method: 'POST',
@@ -73,6 +91,15 @@ export const HealthHistoryView: React.FC<HistoryProps> = ({ state, onStateUpdate
       });
       const fresh = await apiRequest<FullSystemState>('/api/state');
       onStateUpdated(fresh);
+      setHistoryNotice({
+        kind: 'ok',
+        text: `Generated local store-and-forward report for Sol ${fresh.latest_telemetry.mission_day}.`,
+      });
+    } catch (err) {
+      setHistoryNotice({
+        kind: 'err',
+        text: err instanceof Error ? err.message : 'Unable to generate store-and-forward report.',
+      });
     } finally {
       setCreatingReport(false);
     }
@@ -80,33 +107,78 @@ export const HealthHistoryView: React.FC<HistoryProps> = ({ state, onStateUpdate
 
   const downloadSummaryMarkdown = () => {
     const latest = state.latest_telemetry;
+    const symptomList = [
+      ...(latest.reported_symptoms || []),
+      ...(latest.chest_discomfort ? ['Chest discomfort'] : []),
+      ...(latest.palpitations ? ['Palpitations'] : []),
+      ...(latest.shortness_of_breath ? ['Shortness of breath'] : []),
+    ];
+    const alertsText = state.assessment.active_alerts.length
+      ? state.assessment.active_alerts
+          .map((a) => `- **[${a.severity}] ${a.hazard}**: ${a.message} (Next: ${a.action_required})`)
+          .join('\n')
+      : '- None active.';
+    const recsText = state.assessment.recommendations.length
+      ? state.assessment.recommendations
+          .map((r) => `- **[${r.priority}] ${r.hazard}**: ${r.action}`)
+          .join('\n')
+      : '- Continue baseline monitoring.';
+    const psychText = (state.psych_questionnaires || []).slice(0, 5).length
+      ? (state.psych_questionnaires || [])
+          .slice(0, 5)
+          .map(
+            (pq) =>
+              `- Sol ${pq.mission_day} (${provenanceLabel(pq.provenance)}): Mood/Emot ${pq.emotional_condition_rating}/10 · Stress ${pq.psychological_stress_rating}/10 · Fatigue ${pq.fatigue_rating}/10 · Sleep Diff ${pq.sleep_difficulty_rating}/10 · Isolation ${pq.isolation_feeling_rating}/10`,
+          )
+          .join('\n')
+      : '- No standalone psychological check-ins recorded.';
+
     const lines = [
       `# TARSCARE Local Health Summary — Sol ${latest.mission_day}`,
       `Astronaut: ${state.astronaut.name} (${state.astronaut.role})`,
-      `Overall Status: ${state.assessment.overall_status}`,
+      `Gravity Environment: ${gravityRegimeLabel(latest.gravity_g)}`,
+      `Overall Status: ${state.assessment.overall_status}${state.assessment.exercise_contraindicated ? ' (EXERCISE HOLD ACTIVE)' : ''}`,
       `Communication Mode: ${state.assessment.comm_mode?.label || 'Delayed'} (${state.comm_state.one_way_delay_minutes} min one-way)`,
       ``,
       `## Latest Measurements (${provenanceLabel(latest.provenance)})`,
       `- Heart Rate: ${latest.heart_rate_bpm} BPM (Baseline ${state.astronaut.baseline_hr_bpm} BPM)`,
-      `- Blood Pressure: ${latest.systolic_bp_mmhg}/${latest.diastolic_bp_mmhg} mmHg`,
+      `- Blood Pressure: ${latest.systolic_bp_mmhg}/${latest.diastolic_bp_mmhg} mmHg (Baseline ${state.astronaut.baseline_systolic_mmhg}/${state.astronaut.baseline_diastolic_mmhg} mmHg)`,
       `- Oxygen Saturation: ${latest.spo2_pct}% | Respiratory Rate: ${latest.respiratory_rate_bpm ?? 16}/min`,
-      `- Sleep Duration: ${latest.sleep_duration_hrs} hrs | Mood: ${latest.mood_score}/10 | Stress: ${latest.stress_level}/10`,
+      `- Body Temperature: ${latest.body_temp_c} °C`,
+      `- Sleep Duration: ${latest.sleep_duration_hrs} hrs (Quality ${latest.sleep_quality_pct}%) | Mood: ${latest.mood_score}/10 | Stress: ${latest.stress_level}/10`,
+      `- Muscle Strength: ${latest.muscle_strength_idx}% | Balance: ${latest.balance_score}% | Dizziness Grade: ${latest.dizziness_severity}/3`,
       `- Absorbed Dose: ${latest.absorbed_dose_mgy} mGy | Equivalent Rate: ${latest.equivalent_dose_rate_msv_day} mSv/day | Cumulative: ${latest.cumulative_effective_dose_msv} mSv`,
-      `- Cabin CO2: ${latest.co2_mmhg} mmHg | Humidity: ${latest.humidity_pct}%`,
+      `- Cabin Environment: CO2 ${latest.co2_mmhg} mmHg | O2 ${latest.oxygen_pct}% | Temp ${latest.cabin_temp_c} °C | RH ${latest.humidity_pct}%`,
+      `- Active Symptoms: ${symptomList.length ? Array.from(new Set(symptomList)).join(', ') : 'None reported'}`,
       ``,
       `## How Am I Doing?`,
       `${state.assessment.glance_summary?.how_am_i_doing || ''}`,
+      `${state.assessment.glance_summary?.what_has_changed || ''}`,
       ``,
-      `Generated autonomously offline by TARSCARE. Not a clinical diagnosis.`,
+      `## Active Alerts`,
+      alertsText,
+      ``,
+      `## Prioritized Recommendations`,
+      recsText,
+      ``,
+      `## Recent Behavioral & Sleep Check-Ins`,
+      psychText,
+      ``,
+      `Generated autonomously offline by TARSCARE. Mission decision-support summary only; not a clinical diagnosis.`,
     ].join('\n');
 
     const blob = new Blob([lines], { type: 'text/markdown;charset=utf-8' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `tarscare-sol-${latest.mission_day}-summary.md`;
+    const filename = `tarscare-sol-${latest.mission_day}-summary.md`;
+    a.download = filename;
     a.click();
     URL.revokeObjectURL(url);
+    setHistoryNotice({
+      kind: 'ok',
+      text: `Exported local Markdown report: ${filename}`,
+    });
   };
 
   return (
@@ -175,6 +247,17 @@ export const HealthHistoryView: React.FC<HistoryProps> = ({ state, onStateUpdate
       </section>
 
       {/* Store-and-Forward Reports & Historical Alerts */}
+      {historyNotice && (
+        <div
+          className={`rounded-xl px-4 py-3 text-xs border ${historyNotice.kind === 'err'
+            ? 'bg-red-500/15 border-red-400/40 text-red-100'
+            : 'bg-[#0B0D1A] border-[#A5D8FF]/35 text-[#A5D8FF]'
+            }`}
+        >
+          {historyNotice.text}
+        </div>
+      )}
+
       <section className="grid grid-cols-1 lg:grid-cols-2 gap-5">
         <div className="mc-card p-5 space-y-3.5">
           <div className="flex items-center justify-between">
@@ -232,8 +315,59 @@ export const HealthHistoryView: React.FC<HistoryProps> = ({ state, onStateUpdate
         </div>
       </section>
 
+      {/* Behavioral & Sleep Check-In History */}
+      <section className="mc-card p-5 lg:p-6 space-y-4">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div>
+            <h2 className="text-lg font-semibold text-[#FAF9FA]">
+              Behavioral &amp; Sleep Check-In History ({state.psych_questionnaires?.length || 0})
+            </h2>
+            <p className="text-xs text-[#E5E5E4]/75">
+              Self-reported isolation, fatigue, mood, concentration, and private reflections stored separately from sensor telemetry.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => setShowJournals((prev) => !prev)}
+            className="mc-btn-secondary px-3.5 py-1.5 text-xs inline-flex items-center gap-1.5"
+          >
+            {showJournals ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+            <span>{showJournals ? 'Hide Private Reflections' : 'Show Private Reflections'}</span>
+          </button>
+        </div>
+
+        {(state.psych_questionnaires?.length || 0) === 0 ? (
+          <div className="rounded-xl bg-[#0B0D1A] p-4 text-xs text-[#E5E5E4]/75">
+            No standalone psychological check-ins recorded yet.
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3 max-h-[300px] overflow-y-auto pr-1">
+            {state.psych_questionnaires.map((pq, idx) => (
+              <div key={`${pq.mission_day}-${pq.timestamp}-${idx}`} className="rounded-xl bg-[#0B0D1A] p-3.5 border border-white/[0.06] space-y-1.5 text-xs">
+                <div className="flex items-center justify-between">
+                  <strong className="text-sm text-[#FAF9FA]">Sol {pq.mission_day}</strong>
+                  <span className="text-[#A5D8FF]">{provenanceLabel(pq.provenance)}</span>
+                </div>
+                <div className="flex flex-wrap gap-2 text-[#E5E5E4]/85 tabular-data">
+                  <span>Mood {pq.emotional_condition_rating}/10</span>
+                  <span>· Stress {pq.psychological_stress_rating}/10</span>
+                  <span>· Fatigue {pq.fatigue_rating}/10</span>
+                  <span>· Sleep Diff {pq.sleep_difficulty_rating}/10</span>
+                  <span>· Isolation {pq.isolation_feeling_rating}/10</span>
+                </div>
+                {pq.journal_reflection && (
+                  <p className="text-[#E5E5E4]/75 italic pt-1 border-t border-white/[0.06]">
+                    {showJournals ? pq.journal_reflection : '[Private reflection hidden — click "Show Private Reflections" to inspect]'}
+                  </p>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+      </section>
+
       {/* Longitudinal Radiation, Sleep, Exercise & Vitals Log Table */}
-      <section className="mc-card p-5 lg:p-6 space-y-4 overflow-x-auto">
+      <section className="mc-card p-5 lg:p-6 space-y-4">
         <div className="flex items-center justify-between gap-2">
           <h2 className="text-lg font-semibold text-[#FAF9FA]">
             Physiological &amp; Hazard Log ({filteredRecords.length} entries)
@@ -241,7 +375,8 @@ export const HealthHistoryView: React.FC<HistoryProps> = ({ state, onStateUpdate
           <span className="text-xs text-[#E5E5E4]/70">Sorted newest first</span>
         </div>
 
-        <table className="w-full text-left border-collapse text-xs sm:text-sm min-w-[780px]">
+        <div className="overflow-x-auto">
+        <table className="w-full text-left border-collapse text-xs sm:text-sm min-w-[820px]">
           <thead>
             <tr className="border-b border-white/10 text-[#E5E5E4]/75">
               <th className="py-2.5 pr-3">Sol</th>
@@ -251,12 +386,13 @@ export const HealthHistoryView: React.FC<HistoryProps> = ({ state, onStateUpdate
               <th className="py-2.5 pr-3">Sleep</th>
               <th className="py-2.5 pr-3">Exercise</th>
               <th className="py-2.5 pr-3">Absorbed / Equiv Rad.</th>
-              <th className="py-2.5">Cabin CO₂</th>
+              <th className="py-2.5 pr-3">Cabin CO₂</th>
+              <th className="py-2.5">Flags</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-white/[0.06] tabular-data">
             {filteredRecords.map((r, idx) => (
-              <tr key={`${r.mission_day}-${idx}`} className="hover:bg-white/[0.02]">
+              <tr key={`${r.mission_day}-${r.timestamp}-${idx}`} className="hover:bg-white/[0.02]">
                 <td className="py-2.5 pr-3 font-semibold text-[#FAF9FA]">Sol {r.mission_day}</td>
                 <td className="py-2.5 pr-3 text-[#A5D8FF] text-xs">{provenanceLabel(r.provenance)}</td>
                 <td className="py-2.5 pr-3 text-[#FAF9FA]">
@@ -268,11 +404,20 @@ export const HealthHistoryView: React.FC<HistoryProps> = ({ state, onStateUpdate
                 <td className="py-2.5 pr-3 text-[#E5E5E4]">
                   {r.absorbed_dose_mgy.toFixed(2)} mGy / {r.equivalent_dose_rate_msv_day.toFixed(2)} mSv/d
                 </td>
-                <td className="py-2.5 text-[#E5E5E4]">{r.co2_mmhg.toFixed(1)} mmHg</td>
+                <td className="py-2.5 pr-3 text-[#E5E5E4]">{r.co2_mmhg.toFixed(1)} mmHg</td>
+                <td className="py-2.5 text-xs text-amber-300">
+                  {[
+                    r.chest_discomfort ? 'Chest' : null,
+                    r.palpitations ? 'Palp' : null,
+                    r.shortness_of_breath ? 'SOB' : null,
+                    r.dizziness_severity >= 1 ? `Diz${r.dizziness_severity}` : null,
+                  ].filter(Boolean).join(', ') || '—'}
+                </td>
               </tr>
             ))}
           </tbody>
         </table>
+        </div>
       </section>
     </div>
   );
@@ -291,6 +436,7 @@ export const CommunicationStatusView: React.FC<CommProps> = ({
 }) => {
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
+  const [syncError, setSyncError] = useState<string | null>(null);
   const [aiBusy, setAiBusy] = useState(false);
   const [aiNotice, setAiNotice] = useState<string | null>(null);
 
@@ -301,6 +447,7 @@ export const CommunicationStatusView: React.FC<CommProps> = ({
   const setCommMode = async (mode: 'CONNECTED' | 'DELAYED' | 'OFFLINE') => {
     setBusy(true);
     setNotice(null);
+    setSyncError(null);
     try {
       await apiRequest('/api/comm/mode', {
         method: 'POST',
@@ -309,6 +456,8 @@ export const CommunicationStatusView: React.FC<CommProps> = ({
       const fresh = await apiRequest<FullSystemState>('/api/state');
       onStateUpdated(fresh);
       setNotice(`Communication simulation switched to ${mode}. All health features remain active onboard.`);
+    } catch (err) {
+      setSyncError(err instanceof Error ? err.message : 'Unable to switch communication mode.');
     } finally {
       setBusy(false);
     }
@@ -317,13 +466,30 @@ export const CommunicationStatusView: React.FC<CommProps> = ({
   const syncQueue = async () => {
     setBusy(true);
     setNotice(null);
+    setSyncError(null);
     try {
-      const res = await apiRequest<{ synchronized_count: number }>('/api/comm/sync', {
+      const res = await apiRequest<SyncResponse>('/api/comm/sync', {
         method: 'POST',
       });
-      const fresh = await apiRequest<FullSystemState>('/api/state');
-      onStateUpdated(fresh);
-      setNotice(`Synchronized ${res.synchronized_count} queued store-and-forward report(s) cleanly.`);
+      if (res.state) {
+        onStateUpdated(res.state);
+      } else {
+        const fresh = await apiRequest<FullSystemState>('/api/state');
+        onStateUpdated(fresh);
+      }
+      const sr = res.sync_result;
+      if (!sr || sr.status === 'BLOCKED_OFFLINE') {
+        setSyncError(
+          sr?.message ||
+            'Synchronization blocked while Offline (Blackout). Switch to Delayed or Connected to transmit queued packets.',
+        );
+      } else {
+        setNotice(
+          `Synchronized ${sr.synchronized_count} queued store-and-forward report(s); ${sr.remaining_queued} remaining.`,
+        );
+      }
+    } catch (err) {
+      setSyncError(err instanceof Error ? err.message : 'Failed to synchronize queued telemetry.');
     } finally {
       setBusy(false);
     }
@@ -394,6 +560,13 @@ export const CommunicationStatusView: React.FC<CommProps> = ({
             );
           })}
         </div>
+
+        {syncError && (
+          <div className="rounded-xl bg-amber-500/15 px-4 py-3 text-sm text-amber-100 border border-amber-400/40 flex items-center gap-2">
+            <AlertTriangle className="w-4 h-4 text-amber-300 shrink-0" />
+            <span>{syncError}</span>
+          </div>
+        )}
 
         {notice && (
           <div className="rounded-xl bg-[#0B0D1A] px-4 py-3 text-sm text-[#A5D8FF] border border-[#A5D8FF]/30">
@@ -486,6 +659,8 @@ export const CommunicationStatusView: React.FC<CommProps> = ({
             <div className="pt-2 border-t border-white/[0.08] flex flex-wrap items-center gap-2.5">
               {(aiStatus.installed_chat_models?.length || 0) > 0 && (
                 <select
+                  id="comm-ollama-model-select"
+                  name="comm_ollama_model"
                   aria-label="Select local Ollama model"
                   disabled={aiBusy}
                   value={aiStatus.ollama_model || aiStatus.installed_chat_models?.[0] || ''}

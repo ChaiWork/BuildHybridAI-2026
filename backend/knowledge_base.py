@@ -10,7 +10,7 @@ from __future__ import annotations
 import math
 import re
 from dataclasses import dataclass, asdict
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Tuple
 
 
 @dataclass
@@ -397,6 +397,81 @@ class LocalRAGEngine:
         return results
 
     @staticmethod
+    def detect_conflicts(
+        question: str,
+        citations: List[Dict[str, Any]],
+        astronaut_context: Optional[Dict[str, Any]] = None,
+    ) -> Optional[str]:
+        """Detect environment, gravity-regime, or policy conflicts across retrieved citations."""
+        doc_ids = {str(c.get("doc_id", "")) for c in citations}
+        joined = " ".join(str(c.get("excerpt", "")) for c in citations).lower()
+        ql = question.lower()
+        notes: List[str] = []
+
+        has_armas = any("ARMAS" in d.upper() for d in doc_ids) or "armas" in ql
+        if has_armas and (
+            any(d in doc_ids for d in ("NASA-HRP-RAD-01", "CSA-RAD-2026-01", "NASA-RADLAB-01"))
+            or "mars" in ql
+        ):
+            notes.append(
+                "Regime mismatch safeguard: ARMAS data originates from Earth atmospheric aircraft altitudes and serves only as a radiation-instrument benchmark; it is NOT a direct measurement of Mars surface or deep-space GCR/SPE exposure."
+            )
+
+        if (
+            ("microgravity" in joined or "weightlessness" in joined or "0g" in joined)
+            and ("earth" in joined or "0.38g" in joined or "mars" in joined)
+            and any(k in ql for k in ("gravity", "blood pressure", "bone", "orthostatic", "baseline", "conflict", "contradict", "threshold"))
+        ):
+            notes.append(
+                "Gravity-regime note: Research spans microgravity (0g), partial Mars gravity (0.38g), and Earth (1g) clinical benchmarks; thresholds do not transfer identically across gravity regimes."
+            )
+
+        if any(k in ql for k in ("contradict", "conflict", "disagree", "inconsistent")):
+            notes.append(
+                "Conflict-resolution protocol: When retrieved documents diverge, TARSCARE preserves both citations side-by-side without guessing a winner, follows the more conservative onboard safety posture, and defers final interpretation to the Crew Medical Officer and Earth Flight Surgeons."
+            )
+
+        return " ".join(notes) if notes else None
+
+    @staticmethod
+    def split_evidence_and_procedures(
+        citations: List[Dict[str, Any]],
+        astronaut_context: Optional[Dict[str, Any]] = None,
+    ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+        scientific_evidence: List[Dict[str, Any]] = []
+        operational_procedures: List[Dict[str, Any]] = []
+
+        for cit in citations:
+            prov = str(cit.get("provenance", "REAL_RESEARCH_REF")).upper()
+            item = {
+                "doc_id": cit.get("doc_id"),
+                "title": cit.get("title"),
+                "agency": cit.get("agency"),
+                "year": cit.get("year"),
+                "excerpt": cit.get("excerpt"),
+                "provenance": prov,
+            }
+            if prov == "SYSTEM_OPERATIONAL_SPEC":
+                operational_procedures.append(item)
+            else:
+                scientific_evidence.append(item)
+
+        operational_procedures.append(
+            {
+                "doc_id": "MISSION-BASELINE-POLICY",
+                "title": "Mission Prototype Guidance & CMO Escalation Boundary",
+                "agency": "TARSCARE Operational Layer",
+                "year": "2026",
+                "excerpt": (
+                    "Compare live telemetry against the astronaut's personal baseline rather than unvalidated Earth norms; "
+                    "trigger onboard CMO checklist and Store-and-Forward Flight Surgeon packet for CRITICAL excursions."
+                ),
+                "provenance": "MISSION_CONFIGURED_PROTOTYPE_RULE",
+            }
+        )
+        return scientific_evidence, operational_procedures
+
+    @staticmethod
     def build_insufficient_evidence_response(
         question: str,
         citations: List[Dict[str, Any]],
@@ -406,12 +481,24 @@ class LocalRAGEngine:
             "query": question,
             "engine_mode": engine_mode,
             "sufficient_evidence": False,
+            "conflict_notice": None,
+            "scientific_evidence": [],
+            "operational_procedures": [
+                {
+                    "doc_id": "TARSCARE-SPEC-01",
+                    "title": "Out-of-Scope / Insufficient Evidence Protocol",
+                    "agency": "TARSCARE Operational Layer",
+                    "year": "2026",
+                    "excerpt": "Refuse speculation, state the knowledge gap honestly, and escalate to the onboard Crew Medical Officer (CMO) or Flight Surgeon queue.",
+                    "provenance": "SYSTEM_OPERATIONAL_SPEC",
+                }
+            ],
             "answer": (
-                "The onboard NASA/CSA scientific knowledge base does not contain sufficient direct "
-                "evidence matching this specific query. In accordance with mission medical safety "
-                "rules, TARSCARE AI does not speculate, diagnose conditions, or prescribe unverified "
-                "treatments. Please consult the onboard Crew Medical Officer (CMO) checklist or "
-                "queue a store-and-forward inquiry for Earth Flight Surgeons."
+                "Insufficient evidence in onboard knowledge base: The locally stored NASA/CSA scientific documents do not "
+                "contain direct verified information to answer this query safely. In accordance with mission medical safety "
+                "rules [TARSCARE-SPEC-01], TARSCARE refuses to speculate, diagnose conditions, prescribe medications/dosages, or "
+                "fabricate citations. Please consult the onboard Crew Medical Officer (CMO) Medical Operations Kit checklist "
+                "or queue a Store-and-Forward inquiry for Earth Flight Surgeons."
             ),
             "safety_notice": (
                 "Decision-support output only. Does not constitute a clinical diagnosis or medication prescription."
@@ -425,46 +512,80 @@ class LocalRAGEngine:
         citations: List[Dict[str, Any]],
         astronaut_context: Optional[Dict[str, Any]] = None,
         engine_mode: str = "LOCAL_RAG_VERIFIED_CORPUS",
+        conflict_notice: Optional[str] = None,
     ) -> Dict[str, Any]:
-        top_citations = citations[:3]
+        top_citations = citations[:4]
         hazards_mentioned = sorted({c["hazard_category"] for c in top_citations})
+        if conflict_notice is None:
+            conflict_notice = LocalRAGEngine.detect_conflicts(question, top_citations, astronaut_context)
+        sci_evidence, op_procedures = LocalRAGEngine.split_evidence_and_procedures(top_citations, astronaut_context)
 
-        context_line = ""
+        ql = question.lower()
+        lead_parts: List[str] = []
         if astronaut_context:
             phase = astronaut_context.get("mission_phase", "MARS_SURFACE")
             risk = astronaut_context.get("overall_status", "WARNING")
             sol = astronaut_context.get("mission_day")
             sol_txt = f" on Sol {sol}" if sol else ""
-            context_line = (
+            lead_parts.append(
                 f"Mission Context: Current environment is {phase}{sol_txt} with overall status classified as {risk} "
-                f"(prototype baseline-comparison rule). "
+                f"(prototype baseline-comparison rule; telemetry provenance: {astronaut_context.get('provenance', 'SYNTHETIC_DEMO')})."
             )
 
-        synthesized_points = [
+        if "guarantee" in ql:
+            lead_parts.append(
+                "Direct Answer: No — neither TARSCARE nor current NASA/CSA spaceflight countermeasures can guarantee that an astronaut will stay healthy on Mars. Deep-space radiation, partial/microgravity adaptation, ECLSS failures, and unexpected medical events carry irreducible biological risk."
+            )
+        if "armas" in ql and "mars" in ql:
+            lead_parts.append(
+                "ARMAS Regime Distinction: ARMAS measurements are acquired aboard high-altitude aircraft inside Earth's atmosphere and serve as instrument benchmarks, NOT direct measurements of Mars surface or interplanetary radiation."
+            )
+        if ("gy" in ql or "gray" in ql) and ("sv" in ql or "sievert" in ql):
+            lead_parts.append(
+                "Dose Units Distinction (Gy vs Sv): Gray (Gy / mGy) measures physical absorbed ionizing energy per unit mass, whereas Sievert (Sv / mSv) weights biological damage risk using radiation quality factors (HZE vs. protons). Never equate Gy directly to Sv."
+            )
+
+        sci_lines = [
+            f"[{e['doc_id']}] ({e['agency']}, {e['year']}): {e['excerpt']}"
+            for e in sci_evidence[:3]
+        ]
+        spec_lines = [
             f"[{cit['doc_id']}] ({cit['agency']}, {cit['year']}): {cit['excerpt']}"
             for cit in top_citations
+            if cit.get("provenance") == "SYSTEM_OPERATIONAL_SPEC"
         ]
 
-        answer = (
-            f"{context_line}Based on onboard {', '.join(hazards_mentioned)} research literature:\n\n"
-            + "\n\n".join(synthesized_points)
-            + "\n\nOperational Guidance & Safety Boundary: Compare current readings against your personal "
-            "pre-flight/in-flight baseline rather than fixed 1g Earth norms. Follow approved mission "
-            "countermeasures (shielding/ALARA for radiation, circadian light & sleep protection for isolation, "
-            "ARED/fluid protocols for gravity transitions, and ECLSS ventilation verification for cabin CO2). "
-            "If CRITICAL symptoms are present, initiate the local autonomous CMO emergency protocol immediately."
+        sections: List[str] = []
+        if lead_parts:
+            sections.append(" ".join(lead_parts))
+        if sci_lines:
+            sections.append(
+                f"Scientific Evidence ({', '.join(hazards_mentioned)}):\n\n" + "\n\n".join(sci_lines)
+            )
+        if spec_lines:
+            sections.append("Operational & Safety Specification:\n\n" + "\n\n".join(spec_lines))
+        if conflict_n   otice:
+            sections.append(f"Source & Regime Conflict Notice: {conflict_notice}")
+
+        sections.append(
+            "Operational Guidance (Prototype Rule Layer — Distinct from Peer-Reviewed Citations): Compare current readings against your personal "
+            "pre-flight/in-flight baseline rather than fixed 1g Earth norms. Follow approved mission countermeasures "
+            "and initiate the local autonomous CMO Emergency Checklist immediately if CRITICAL vitals or red-flag symptoms develop."
         )
 
         return {
             "query": question,
             "engine_mode": engine_mode,
             "sufficient_evidence": True,
-            "answer": answer,
+            "conflict_notice": conflict_notice,
+            "scientific_evidence": sci_evidence,
+            "operational_procedures": op_procedures,
+            "answer": "\n\n".join(sections),
             "safety_notice": (
-                "Non-diagnostic evidence summary derived from locally stored NASA HRP & CSA references. "
+                "Non-diagnostic evidence summary derived from locally stored NASA HRP, CSA & operational reference passages. "
                 "Prototype decision rules are not clinically validated."
             ),
-            "citations": top_citations,
+            "citations": top_citations[:3],
         }
 
     def answer_question(
@@ -474,7 +595,7 @@ class LocalRAGEngine:
         astronaut_context: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         retrieved = self.retrieve(question, hazard_filter=hazard_filter, top_k=4)
-        sufficient_evidence = len(retrieved) > 0 and retrieved[0]["relevance_score"] >= 0.12
+        sufficient_evidence = len(retrieved) > 0 and retrieved[0]["relevance_score"] >= 0.14
 
         if not sufficient_evidence:
             return self.build_insufficient_evidence_response(question, retrieved)

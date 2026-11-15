@@ -47,7 +47,7 @@ _PREFERRED_CHAT_PREFIXES = (
 
 _PRESCRIPTION_LEAK_RE = re.compile(
     r"(?i)\b(?:take|administer|prescribe|start|dose\s+of)\s+\d+(?:\.\d+)?\s*(?:mg|mcg|g|ml|tablet|tablets|capsule|capsules|pill|pills)\b"
-    r"|\b(?:amoxicillin|azithromycin|ciprofloxacin|doxycycline|ibuprofen|acetaminophen|paracetamol|prednisone|alprazolam|sertraline|modafinil|zolpidem)\s+\d+(?:\.\d+)?\s*(?:mg|mcg)\b"
+    r"|\b(?:amoxicillin|azithromycin|ciprofloxacin|doxycycline|ibuprofen|acetaminophen|paracetamol|prednisone|alprazolam|sertraline|modafinil|zolpidem|metoprolol|atenolol|propranolol|amiodarone|aspirin|nitroglycerin|tramadol|codeine|diazepam|lorazepam|melatonin)\s+\d+(?:\.\d+)?\s*(?:mg|mcg)\b"
 )
 
 
@@ -209,6 +209,40 @@ EXTRA_CORPUS_DICTS: List[Dict[str, Any]] = [
                 "Cardiovascular & Vascular Conditioning Countermeasures",
                 "Combining aerobic cycle/treadmill intervals with adequate fluid-electrolyte intake mitigates post-transit orthostatic dizziness "
                 "and supports vascular elasticity."
+            ),
+        ],
+    },
+    {
+        "doc_id": "TARSCARE-SPEC-01",
+        "title": "TARSCARE Operational Safety Rules: Insufficient Evidence, Conflict Handling & Scope",
+        "agency": "TARSCARE System Spec",
+        "year": "2026",
+        "url": "local://tarscare-operational-safety-spec",
+        "hazard_category": "Distance from Earth",
+        "provenance": "SYSTEM_OPERATIONAL_SPEC",
+        "summary": (
+            "System operational safety specification (distinct from NASA/CSA scientific studies). Defines strict fallback behavior when the "
+            "knowledge base lacks sufficient evidence, when retrieved sources contradict or span incompatible mission regimes, and why software "
+            "monitoring cannot guarantee astronaut health or diagnose medical conditions."
+        ),
+        "sections": [
+            (
+                "Insufficient Evidence & Non-Speculation Policy",
+                "When no onboard NASA/CSA passage directly supports a user's question above retrieval confidence and keyword-coverage thresholds, "
+                "TARSCARE explicitly reports insufficient evidence, refuses to guess or invent scientific citations/limits, and recommends consulting "
+                "the onboard Crew Medical Officer (CMO) checklist or queuing a Store-and-Forward Flight Surgeon packet."
+            ),
+            (
+                "Contradictory or Conflicting Scientific Sources Protocol",
+                "When two retrieved scientific documents contradict each other or represent incompatible gravity/radiation regimes (e.g., Earth-altitude "
+                "ARMAS vs. deep-space GCR/SPE, or 0g microgravity vs. 0.38g Mars vs. 1g Earth clinical norms), TARSCARE does NOT suppress either document "
+                "or guess a single winner autonomously. Both citations are presented side-by-side with an explicit Conflict Notice, the system adopts "
+                "the more conservative safety precaution onboard, and escalates final reconciliation to the Crew Medical Officer and Flight Surgeons."
+            ),
+            (
+                "Non-Guarantee & Non-Diagnostic Boundary",
+                "TARSCARE is a prototype autonomous health-monitoring and decision-support tool, not a certified clinical device. Monitoring personal "
+                "baselines and spaceflight countermeasures lowers operational risk but CANNOT guarantee that an astronaut will remain healthy on Mars."
             ),
         ],
     },
@@ -526,6 +560,12 @@ def rerank_with_embeddings_if_cached(
     return combined
 
 
+def _fmt_val(val: Any, suffix: str = "") -> str:
+    if val is None or val == "":
+        return "not set"
+    return f"{val}{suffix}"
+
+
 def _format_telemetry_context(astronaut_context: Optional[Dict[str, Any]]) -> str:
     if not astronaut_context:
         return ""
@@ -534,6 +574,7 @@ def _format_telemetry_context(astronaut_context: Optional[Dict[str, Any]]) -> st
     phase = astronaut_context.get("mission_phase")
     grav = astronaut_context.get("gravity_g")
     status = astronaut_context.get("overall_status")
+    hazard_statuses = astronaut_context.get("hazard_statuses") or {}
     provenance = astronaut_context.get("provenance", "SYNTHETIC_DEMO")
     tel = astronaut_context.get("latest_telemetry") or {}
     base = astronaut_context.get("baseline") or {}
@@ -551,14 +592,19 @@ def _format_telemetry_context(astronaut_context: Optional[Dict[str, Any]]) -> st
     header_parts.append(f"Data Provenance: {provenance}")
 
     lines = [" | ".join(header_parts)]
+    if hazard_statuses:
+        hz_txt = ", ".join(f"{k}={v}" for k, v in hazard_statuses.items())
+        lines.append(f"- Active Hazard Statuses: {hz_txt}")
     if tel:
         hr = tel.get("heart_rate_bpm")
-        hr_base = base.get("baseline_heart_rate_bpm")
+        hr_base = base.get("baseline_hr_bpm") if base.get("baseline_hr_bpm") is not None else base.get("baseline_heart_rate_bpm")
         sbp = tel.get("systolic_bp_mmhg")
         dbp = tel.get("diastolic_bp_mmhg")
-        sbp_base = base.get("baseline_systolic_bp_mmhg")
-        dbp_base = base.get("baseline_diastolic_bp_mmhg")
+        sbp_base = base.get("baseline_systolic_mmhg") if base.get("baseline_systolic_mmhg") is not None else base.get("baseline_systolic_bp_mmhg")
+        dbp_base = base.get("baseline_diastolic_mmhg") if base.get("baseline_diastolic_mmhg") is not None else base.get("baseline_diastolic_bp_mmhg")
         spo2 = tel.get("spo2_pct")
+        spo2_base = base.get("baseline_spo2_pct")
+        resp_rate = tel.get("respiratory_rate_bpm")
         temp = tel.get("body_temp_c")
         sleep_h = tel.get("sleep_duration_hrs")
         sleep_base = base.get("baseline_sleep_hrs")
@@ -567,6 +613,8 @@ def _format_telemetry_context(astronaut_context: Optional[Dict[str, Any]]) -> st
         fatigue = tel.get("fatigue_level")
         co2_mm = tel.get("co2_mmhg")
         co2_ppm = tel.get("co2_ppm")
+        cabin_temp = tel.get("cabin_temp_c")
+        o2_pct = tel.get("oxygen_pct")
         humid = tel.get("humidity_pct")
         abs_mgy = tel.get("absorbed_dose_mgy")
         abs_rate = tel.get("absorbed_dose_rate_mgy_hr")
@@ -576,32 +624,45 @@ def _format_telemetry_context(astronaut_context: Optional[Dict[str, Any]]) -> st
         rad_src = tel.get("radiation_source")
         resp_sym = tel.get("respiratory_symptoms") or []
         inf_sym = tel.get("infection_symptoms") or []
+        rep_sym = tel.get("reported_symptoms") or []
         dizz = tel.get("dizziness_severity")
         presyncope = tel.get("faintness_presyncope")
         sans = tel.get("visual_disturbance_sans")
+        chest = bool(tel.get("chest_discomfort", False))
+        palp = bool(tel.get("palpitations", False))
+        sob = bool(tel.get("shortness_of_breath", False))
 
+        bp_base_str = f"{sbp_base}/{dbp_base} mmHg" if (sbp_base is not None and dbp_base is not None) else "not configured"
         lines.append(
-            f"- Cardiovascular & Vitals: HR {hr} bpm (baseline {hr_base} bpm), "
-            f"BP {sbp}/{dbp} mmHg (baseline {sbp_base}/{dbp_base} mmHg), "
-            f"SpO2 {spo2}%, Temp {temp} C, Dizziness grade {dizz}, Presyncope={presyncope}, SANS visual shift={sans}."
+            f"- Cardiovascular & Vitals: HR {_fmt_val(hr, ' bpm')} (personal baseline {_fmt_val(hr_base, ' bpm')}), "
+            f"BP {sbp}/{dbp} mmHg (personal baseline {bp_base_str}), "
+            f"SpO2 {_fmt_val(spo2, '%')} (baseline {_fmt_val(spo2_base, '%')}), Respiratory Rate {_fmt_val(resp_rate, ' breaths/min')}, "
+            f"Temp {_fmt_val(temp, ' C')}, Dizziness={dizz}/3, Presyncope={presyncope}, SANS visual={sans}, "
+            f"Red-flag symptoms: chest_discomfort={chest}, palpitations={palp}, shortness_of_breath={sob}, other={rep_sym or 'None'}."
         )
         lines.append(
-            f"- Behavioral & Sleep: Sleep {sleep_h} hrs (baseline {sleep_base} hrs), "
-            f"Mood {mood}/10, Stress {stress}/10, Fatigue {fatigue}/10."
+            f"- Behavioral & Sleep: Sleep {_fmt_val(sleep_h, ' hrs')} (baseline {_fmt_val(sleep_base, ' hrs')}), "
+            f"Mood {_fmt_val(mood, '/10')}, Stress {_fmt_val(stress, '/10')}, Fatigue {_fmt_val(fatigue, '/10')}, "
+            f"Exercise Performance {_fmt_val(tel.get('exercise_performance_pct'), '%')}."
         )
         lines.append(
             f"- Radiation Dosimetry (keep Gy vs Sv strictly distinct): "
-            f"Absorbed Dose {abs_mgy} mGy ({abs_rate} mGy/hr), "
-            f"Equivalent Dose Rate {eq_rate} mSv/day, Cumulative Effective Dose {cum_msv} mSv, "
+            f"Absorbed Dose {_fmt_val(abs_mgy, ' mGy')} ({_fmt_val(abs_rate, ' mGy/hr')}), "
+            f"Equivalent Dose Rate {_fmt_val(eq_rate, ' mSv/day')}, Cumulative Effective Dose {_fmt_val(cum_msv, ' mSv')}, "
             f"Event={rad_evt}, Source={rad_src}."
         )
         lines.append(
-            f"- Habitat ECLSS & Symptoms: CO2 {co2_mm} mmHg ({co2_ppm} ppm), "
-            f"Humidity {humid}%, Respiratory symptoms={resp_sym or 'None'}, "
-            f"Infection-like symptoms={inf_sym or 'None'}."
+            f"- Habitat ECLSS & Symptoms: CO2 {_fmt_val(co2_mm, ' mmHg')} ({_fmt_val(co2_ppm, ' ppm')}), "
+            f"O2 {_fmt_val(o2_pct, '%')}, Cabin Temp {_fmt_val(cabin_temp, ' C')}, Humidity {_fmt_val(humid, '%')}, "
+            f"Respiratory symptoms={resp_sym or 'None'}, Infection-like symptoms={inf_sym or 'None'}."
         )
     if alerts:
-        lines.append("- Active Telemetry Findings: " + "; ".join(str(a) for a in alerts[:5]))
+        alert_texts = [
+            f"{a.get('severity', '')} [{a.get('hazard', '')}]: {a.get('message', a)}"
+            if isinstance(a, dict) else str(a)
+            for a in alerts[:5]
+        ]
+        lines.append("- Active Telemetry Alerts: " + "; ".join(alert_texts))
     return "\n".join(lines)
 
 
@@ -609,25 +670,87 @@ def _verify_and_finalize_llm_answer(
     raw_text: str,
     question: str,
     citations: List[Dict[str, Any]],
+    astronaut_context: Optional[Dict[str, Any]] = None,
 ) -> Optional[str]:
     """
     Post-generation safety & provenance gate:
-    1) Reject empty or too-short outputs.
+    1) Reject empty/too-short outputs or leaked None/NaN values.
     2) Reject unapproved drug prescription / specific dosage leakage.
-    3) Ensure explicit [DOC-ID] citation presence for traceability.
+    3) Reject false reassurance when telemetry status is WARNING/CRITICAL.
+    4) Reject false health guarantees or ARMAS-is-Mars errors.
+    5) Verify cited [DOC-ID] tags match retrieved sources & trim incomplete trailing cuts.
     """
     text = (raw_text or "").strip()
     if len(text) < 25:
         return None
     if _PRESCRIPTION_LEAK_RE.search(text):
         return None
+    if re.search(r"\b(?:None|null|NaN)\b(?:\s*(?:bpm|mmHg|hrs|%|mSv|mGy)|[,.)])", text, re.IGNORECASE) or "baseline None" in text:
+        return None
+
+    ctx = astronaut_context or {}
+    overall = str(ctx.get("overall_status", "")).upper()
+    hazards = ctx.get("hazard_statuses") or {}
+    has_elevated = overall in ("WARNING", "CRITICAL") or any(
+        str(v).upper() in ("WARNING", "CRITICAL") for v in hazards.values()
+    )
+
+    # Reject false "everything is normal / within normal ranges" claims during active alerts
+    if has_elevated:
+        false_norm_re = re.compile(
+            r"(?i)\b(?:all\s+(?:vital\s+signs|measurements|readings|metrics)\s+are\s+normal|"
+            r"within\s+normal\s+(?:clinical\s+|reference\s+)?(?:ranges|limits)\b|"
+            r"overall\s+(?:health\s+)?status\s+is\s+normal|"
+            r"no\s+(?:abnormalities|alerts|hazards)\s+(?:detected|present|active))\b"
+        )
+        m_norm = false_norm_re.search(text)
+        if m_norm:
+            prefix = text[max(0, m_norm.start() - 20):m_norm.start()].lower()
+            if not any(neg in prefix for neg in ("not ", "no longer ", "outside ", "rather than ")):
+                return None
+
+    ql = question.lower()
+    m_guar = re.search(
+        r"(?i)\b(?:can\s+guarantee|guarantees?\s+(?:health|safety|that\s+an?\s+astronaut)|guaranteed\s+(?:safe|healthy?)|100%\s+safe)\b",
+        text,
+    )
+    if m_guar:
+        prefix = text[max(0, m_guar.start() - 25):m_guar.start()].lower()
+        if not any(neg in prefix for neg in ("not ", "no ", "never ", "cannot ", "unable to ")):
+            return None
+
+    if "armas" in ql or "armas" in text.lower():
+        m_armas = re.search(
+            r"(?i)armas\b.{0,80}\b(?:direct(?:ly)?\s+(?:represent|measur|reflect|record)\w*|represent\w*|measur\w*|telemetry)\b.{0,45}\bmars\b",
+            text,
+        )
+        if m_armas and not any(neg in m_armas.group(0).lower() for neg in ("not ", "never ", "cannot ", "rather than ", "instead of ")):
+            return None
+
+    # Validate bracketed [DOC-ID] tags against retrieved citations so fabricated citations cannot slip through
+    valid_doc_ids = {str(c.get("doc_id")) for c in citations if c.get("doc_id")}
+    found_tags = re.findall(r"\[([A-Z]{2,}(?:-[A-Z0-9]+)+)\]", text)
+    for tag in found_tags:
+        if tag not in valid_doc_ids:
+            text = text.replace(f"[{tag}]", "").replace("  ", " ").strip()
+
+    # Clean mid-sentence truncation cleanly, or reject dangling incomplete fragments
+    if text and text[-1] not in ".!?)]\"":
+        last_end = max(text.rfind("."), text.rfind("!"), text.rfind("?"), text.rfind("]"))
+        tail_word = (text.rstrip(",;:- ").split()[-1].lower() if text.strip() else "")
+        dangling = {"because", "and", "or", "since", "while", "when", "with", "for", "of", "the", "a", "an", "that", "which", "to", "in", "on"}
+        if last_end > max(40, int(len(text) * 0.55)):
+            text = text[: last_end + 1].strip()
+        elif last_end == -1 and tail_word in dangling:
+            return None
+        else:
+            text = text.rstrip(",;:- ") + "."
 
     cited_ids = [c["doc_id"] for c in citations if c.get("doc_id")]
     if cited_ids and not any(doc_id in text for doc_id in cited_ids):
         refs = ", ".join(f"[{did}]" for did in cited_ids[:3])
         text = f"{text}\n\nGrounded References: {refs}"
 
-    ql = question.lower()
     if ("gy" in ql or "gray" in ql or "sv" in ql or "sievert" in ql) and ("Gy" not in text or "Sv" not in text):
         text += (
             "\n\nUnit Integrity Note: Absorbed dose (Gy / mGy) measures physical energy deposited per unit mass, "
@@ -660,13 +783,13 @@ def synthesize_with_ollama(
     system_prompt = (
         "You are TARSCARE, an autonomous deep-space astronaut health companion engineered for NASA Artemis/Mars operations.\n"
         "Strict rules:\n"
-        "1. Ground every medical/spaceflight explanation ONLY in the provided [DOC-ID] NASA/CSA reference passages and the astronaut's live telemetry.\n"
-        "2. Cite supporting sources inline using exact bracketed IDs such as [NASA-HRP-RAD-01] or [CSA-CARDIO-CCISS-01].\n"
-        "3. Compare readings against the astronaut's personal baseline shown in telemetry when relevant, avoiding arbitrary thresholds and noting that ordinary Earth-based clinical reference ranges do not automatically represent safe operating limits in microgravity.\n"
+        "1. Ground every medical/spaceflight explanation ONLY in the provided [DOC-ID] NASA/CSA/TARSCARE reference passages and the live telemetry shown below.\n"
+        "2. Cite supporting sources inline using exact bracketed IDs such as [NASA-HRP-RAD-01] or [CSA-CARDIO-CCISS-01]. NEVER invent a citation ID.\n"
+        "3. Compare readings against the astronaut's personal baseline shown in telemetry when available (never print None or claim WARNING/CRITICAL vitals are normal). Note that ordinary Earth-based clinical reference ranges do not automatically represent safe operating limits in microgravity or partial gravity.\n"
         "4. Distinguish physical absorbed dose (Gy / mGy) from biological equivalent/effective dose (Sv / mSv); never invent NASA exposure limits.\n"
-        "5. Never treat ARMAS Earth atmospheric data as direct Martian radiation telemetry, and note when mission telemetry is synthetic demo data.\n"
-        "6. Never diagnose psychiatric disorders or clinical infections from sensors, and NEVER prescribe medications or drug dosages.\n"
-        "7. Keep answers calm, practical, concise, and clearly structured for crew action without waiting for Earth."
+        "5. Never treat ARMAS Earth atmospheric aircraft radiation data as direct Mars surface telemetry, and explicitly identify synthetic demo vs. user-entered telemetry.\n"
+        "6. Never diagnose psychiatric disorders or clinical infections from sensors, NEVER guarantee health outcomes, and NEVER prescribe medications or drug dosages.\n"
+        "7. Keep answers concise, complete (finish every sentence), clearly separated between scientific evidence and operational procedure, and practical for autonomous crew action."
     )
 
     messages: List[Dict[str, str]] = [{"role": "system", "content": system_prompt}]
@@ -679,7 +802,7 @@ def synthesize_with_ollama(
 
     user_content = (
         f"LIVE ASTRONAUT TELEMETRY:\n{telemetry_block or 'No live telemetry attached.'}\n\n"
-        f"RETRIEVED NASA/CSA REFERENCE PASSAGES:\n{context_lines}\n\n"
+        f"RETRIEVED REFERENCE PASSAGES:\n{context_lines}\n\n"
         f"ASTRONAUT QUESTION:\n{question}"
     )
     messages.append({"role": "user", "content": user_content})
@@ -690,7 +813,7 @@ def synthesize_with_ollama(
             "messages": messages,
             "stream": False,
             "keep_alive": "15m",
-            "options": {"temperature": 0.15, "num_predict": 420},
+            "options": {"temperature": 0.12, "num_predict": 800},
         }
     ).encode("utf-8")
 
@@ -705,7 +828,7 @@ def synthesize_with_ollama(
         with urllib.request.urlopen(req, timeout=60.0) as resp:
             body = json.loads(resp.read().decode("utf-8"))
             raw_text = ((body.get("message") or {}).get("content") or "").strip()
-            verified = _verify_and_finalize_llm_answer(raw_text, question, citations)
+            verified = _verify_and_finalize_llm_answer(raw_text, question, citations, astronaut_context)
             if not verified:
                 return None
             latency_ms = int(round((time.perf_counter() - started) * 1000))

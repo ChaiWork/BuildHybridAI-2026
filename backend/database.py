@@ -19,7 +19,7 @@ from models import (
     RiskLevel,
 )
 
-DB_PATH = os.path.join(os.path.dirname(__file__), "tarscare_local.db")
+DB_PATH = os.environ.get("TARSCARE_DB_PATH") or os.path.join(os.path.dirname(__file__), "tarscare_local.db")
 
 
 def get_conn() -> sqlite3.Connection:
@@ -69,6 +69,9 @@ def init_db() -> None:
             body_temp_c REAL NOT NULL,
             dizziness_severity INTEGER NOT NULL,
             faintness_presyncope INTEGER NOT NULL,
+            chest_discomfort INTEGER NOT NULL DEFAULT 0,
+            palpitations INTEGER NOT NULL DEFAULT 0,
+            shortness_of_breath INTEGER NOT NULL DEFAULT 0,
             physical_activity_mins REAL NOT NULL,
             exercise_performance_pct REAL NOT NULL,
             muscle_strength_idx REAL NOT NULL,
@@ -88,6 +91,7 @@ def init_db() -> None:
             env_warning_event TEXT NOT NULL,
             respiratory_symptoms TEXT NOT NULL,
             infection_symptoms TEXT NOT NULL,
+            reported_symptoms TEXT NOT NULL DEFAULT '[]',
             hygiene_adherence_pct REAL NOT NULL,
             notes TEXT NOT NULL
         )
@@ -146,11 +150,19 @@ def init_db() -> None:
     # Schema migration guard for existing tarscare_local.db
     cur.execute("PRAGMA table_info(telemetry_records)")
     cols = {r["name"] for r in cur.fetchall()}
-    if "respiratory_rate_bpm" not in cols:
-        cur.execute(
-            "ALTER TABLE telemetry_records ADD COLUMN respiratory_rate_bpm REAL NOT NULL DEFAULT 16.0"
-        )
-        conn.commit()
+    migrations = [
+        ("respiratory_rate_bpm", "REAL NOT NULL DEFAULT 16.0"),
+        ("chest_discomfort", "INTEGER NOT NULL DEFAULT 0"),
+        ("palpitations", "INTEGER NOT NULL DEFAULT 0"),
+        ("shortness_of_breath", "INTEGER NOT NULL DEFAULT 0"),
+        ("reported_symptoms", "TEXT NOT NULL DEFAULT '[]'"),
+    ]
+    for col_name, col_def in migrations:
+        if col_name not in cols:
+            cur.execute(
+                f"ALTER TABLE telemetry_records ADD COLUMN {col_name} {col_def}"
+            )
+            conn.commit()
 
     # Seed if empty, and backfill Sols 155-170 if upgrading from 14-Sol DB
     cur.execute("SELECT COUNT(*) as cnt FROM telemetry_records")
@@ -435,11 +447,15 @@ def _row_to_telemetry_dict(row: sqlite3.Row) -> Dict[str, Any]:
     d["feeling_isolated"] = bool(d["feeling_isolated"])
     d["concentration_difficulty"] = bool(d["concentration_difficulty"])
     d["faintness_presyncope"] = bool(d["faintness_presyncope"])
+    d["chest_discomfort"] = bool(d.get("chest_discomfort", 0))
+    d["palpitations"] = bool(d.get("palpitations", 0))
+    d["shortness_of_breath"] = bool(d.get("shortness_of_breath", 0))
     d["spatial_disorientation"] = bool(d["spatial_disorientation"])
     d["visual_disturbance_sans"] = bool(d["visual_disturbance_sans"])
     d.setdefault("respiratory_rate_bpm", 16.0)
     d["respiratory_symptoms"] = json.loads(d["respiratory_symptoms"] or "[]")
     d["infection_symptoms"] = json.loads(d["infection_symptoms"] or "[]")
+    d["reported_symptoms"] = json.loads(d.get("reported_symptoms") or "[]")
     return d
 
 
@@ -452,7 +468,7 @@ def fetch_all_telemetry() -> List[Dict[str, Any]]:
     return rows
 
 
-def fetch_system_state(key: str) -> Dict[str, Any]:
+def fetch_system_state(key: str) -> Any:
     conn = get_conn()
     cur = conn.cursor()
     cur.execute("SELECT value_json FROM system_state WHERE key = ?", (key,))
@@ -461,7 +477,7 @@ def fetch_system_state(key: str) -> Dict[str, Any]:
     return json.loads(row["value_json"]) if row else {}
 
 
-def update_system_state(key: str, value: Dict[str, Any]) -> None:
+def update_system_state(key: str, value: Any) -> None:
     conn = get_conn()
     cur = conn.cursor()
     cur.execute(
@@ -488,23 +504,23 @@ def insert_telemetry_record(data: Dict[str, Any]) -> Dict[str, Any]:
             sleep_duration_hrs, sleep_quality_pct, sleep_schedule_window,
             sleep_irregularities, feeling_isolated, concentration_difficulty, motivation_level,
             heart_rate_bpm, systolic_bp_mmhg, diastolic_bp_mmhg, spo2_pct, respiratory_rate_bpm, body_temp_c,
-            dizziness_severity, faintness_presyncope,
+            dizziness_severity, faintness_presyncope, chest_discomfort, palpitations, shortness_of_breath,
             physical_activity_mins, exercise_performance_pct, muscle_strength_idx,
             exercise_adherence_pct, musculoskeletal_discomfort,
             balance_score, coordination_score, spatial_disorientation, visual_disturbance_sans,
             cabin_temp_c, cabin_pressure_kpa, oxygen_pct, co2_mmhg, co2_ppm,
             humidity_pct, air_quality_index, env_warning_event,
-            respiratory_symptoms, infection_symptoms, hygiene_adherence_pct, notes
+            respiratory_symptoms, infection_symptoms, reported_symptoms, hygiene_adherence_pct, notes
         ) VALUES (
             ?, ?, ?, ?, ?,
             ?, ?, ?, ?, ?, ?, ?,
             ?, ?, ?, ?, ?, ?,
             ?, ?, ?, ?, ?, ?, ?,
-            ?, ?, ?, ?, ?, ?, ?, ?,
+            ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
             ?, ?, ?, ?, ?,
             ?, ?, ?, ?,
             ?, ?, ?, ?, ?, ?, ?, ?,
-            ?, ?, ?, ?
+            ?, ?, ?, ?, ?
         )
         """,
         (
@@ -541,6 +557,9 @@ def insert_telemetry_record(data: Dict[str, Any]) -> Dict[str, Any]:
             data["body_temp_c"],
             data["dizziness_severity"],
             int(bool(data["faintness_presyncope"])),
+            int(bool(data.get("chest_discomfort", False))),
+            int(bool(data.get("palpitations", False))),
+            int(bool(data.get("shortness_of_breath", False))),
             data["physical_activity_mins"],
             data["exercise_performance_pct"],
             data["muscle_strength_idx"],
@@ -560,6 +579,7 @@ def insert_telemetry_record(data: Dict[str, Any]) -> Dict[str, Any]:
             data["env_warning_event"],
             json.dumps(data.get("respiratory_symptoms", [])),
             json.dumps(data.get("infection_symptoms", [])),
+            json.dumps(data.get("reported_symptoms", [])),
             data["hygiene_adherence_pct"],
             data.get("notes", ""),
         ),
@@ -599,8 +619,36 @@ def create_store_forward_report(
     conn = get_conn()
     cur = conn.cursor()
     now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    cur.execute("SELECT COUNT(*) as cnt FROM store_forward_reports")
-    seq = cur.fetchone()["cnt"] + 1
+
+    # Prevent duplicate consecutive identical queued reports
+    cur.execute(
+        """
+        SELECT report_uid, created_at, synced_at, transmission_status
+        FROM store_forward_reports
+        WHERE mission_day = ? AND title = ? AND summary = ? AND risk_level = ?
+        ORDER BY id DESC LIMIT 1
+        """,
+        (mission_day, title, summary, risk_level),
+    )
+    existing = cur.fetchone()
+    if existing and existing["transmission_status"] == "QUEUED_LOCAL_BUFFER" and not comm_online:
+        conn.close()
+        return {
+            "report_uid": existing["report_uid"],
+            "created_at": existing["created_at"],
+            "synced_at": existing["synced_at"],
+            "mission_day": mission_day,
+            "title": title,
+            "summary": summary,
+            "risk_level": risk_level,
+            "hazard_triggers": hazard_triggers,
+            "transmission_status": existing["transmission_status"],
+            "provenance": provenance,
+            "duplicate_prevented": True,
+        }
+
+    cur.execute("SELECT COALESCE(MAX(id), 0) as max_id FROM store_forward_reports")
+    seq = int(cur.fetchone()["max_id"]) + 1
     uid = f"RPT-SOL-{mission_day}-{seq:03d}"
     status = "SYNCHRONIZED_ACK" if comm_online else "QUEUED_LOCAL_BUFFER"
     synced_at = now_iso if comm_online else None
@@ -639,12 +687,31 @@ def create_store_forward_report(
         "hazard_triggers": hazard_triggers,
         "transmission_status": status,
         "provenance": provenance,
+        "duplicate_prevented": False,
     }
 
 
 def synchronize_queued_reports() -> Dict[str, Any]:
+    comm_state = fetch_system_state("comm_state") or {}
+    is_offline = bool(comm_state.get("offline_mode_forced", False)) or (
+        "BLACKOUT" in str(comm_state.get("earth_comm_status", "")).upper()
+    )
     conn = get_conn()
     cur = conn.cursor()
+    cur.execute("SELECT COUNT(*) as cnt FROM store_forward_reports WHERE transmission_status != 'SYNCHRONIZED_ACK'")
+    pending_before = int(cur.fetchone()["cnt"])
+
+    if is_offline:
+        conn.close()
+        return {
+            "synchronized_count": 0,
+            "remaining_queued": pending_before,
+            "status": "BLOCKED_OFFLINE",
+            "message": "Earth communication is in Offline/Blackout mode; queued reports remain safely preserved locally.",
+            "synced_at": comm_state.get("last_sync_timestamp"),
+            "comm_state": comm_state,
+        }
+
     now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     cur.execute(
         """
@@ -654,19 +721,26 @@ def synchronize_queued_reports() -> Dict[str, Any]:
         """,
         (now_iso,),
     )
-    updated_count = cur.rowcount
+    updated_count = int(cur.rowcount or 0)
     conn.commit()
+    cur.execute("SELECT COUNT(*) as cnt FROM store_forward_reports WHERE transmission_status != 'SYNCHRONIZED_ACK'")
+    remaining = int(cur.fetchone()["cnt"])
     conn.close()
 
-    comm_state = fetch_system_state("comm_state")
     comm_state["last_sync_timestamp"] = now_iso
-    if comm_state.get("earth_comm_status") == "CONJUNCTION_BLACKOUT":
-        comm_state["earth_comm_status"] = "NOMINAL_DELAYED"
-    comm_state["offline_mode_forced"] = False
     update_system_state("comm_state", comm_state)
 
+    delay_min = float(comm_state.get("one_way_delay_minutes", 0.0) or 0.0)
+    mode_note = (
+        f"Acknowledged after simulated {delay_min:.1f}-min one-way deep-space transit."
+        if delay_min > 0.1
+        else "Acknowledged over direct Earth link."
+    )
     return {
         "synchronized_count": updated_count,
+        "remaining_queued": remaining,
+        "status": "SYNCED",
+        "message": f"Synchronized {updated_count} report(s). {mode_note}",
         "synced_at": now_iso,
         "comm_state": comm_state,
     }

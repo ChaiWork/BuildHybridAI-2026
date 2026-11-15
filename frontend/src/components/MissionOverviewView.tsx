@@ -8,6 +8,7 @@ import {
   CartesianGrid,
   Tooltip,
   ReferenceLine,
+  Legend,
 } from 'recharts';
 import {
   Activity,
@@ -24,7 +25,7 @@ import {
 } from 'lucide-react';
 import { FullSystemState } from '../types';
 import { InteractiveHumanBody } from './InteractiveHumanBody';
-import { formatRecordedTime, provenanceLabel, statusMeta } from './uiHelpers';
+import { formatRecordedTime, gravityRegimeLabel, provenanceLabel, statusMeta } from './uiHelpers';
 
 interface MissionOverviewViewProps {
   state: FullSystemState;
@@ -55,10 +56,17 @@ export const MissionOverviewView: React.FC<MissionOverviewViewProps> = ({
   const overallMeta = statusMeta(assessment.overall_status);
   const recordedTime = formatRecordedTime(latest.timestamp);
 
-  const slicedHistory = useMemo(
-    () => telemetry_history.slice(-trendDays),
-    [telemetry_history, trendDays],
-  );
+  const slicedHistory = useMemo(() => {
+    const raw = telemetry_history.slice(-trendDays);
+    const counts: Record<number, number> = {};
+    return raw.map((row) => {
+      counts[row.mission_day] = (counts[row.mission_day] || 0) + 1;
+      return {
+        ...row,
+        solLabel: counts[row.mission_day] > 1 ? `Sol ${row.mission_day} (#${counts[row.mission_day]})` : `Sol ${row.mission_day}`,
+      };
+    });
+  }, [telemetry_history, trendDays]);
 
   const bodyRegions = assessment.marscare_body_regions || [];
 
@@ -71,7 +79,6 @@ export const MissionOverviewView: React.FC<MissionOverviewViewProps> = ({
     const sleepDelta = latest.sleep_duration_hrs - astronaut.baseline_sleep_hrs;
     const moodDelta = latest.mood_score - astronaut.baseline_mood_score;
     const stressDelta = latest.stress_level - astronaut.baseline_stress_score;
-    const moodAvg = ((latest.mood_score + (10 - latest.stress_level)) / 2).toFixed(1);
     return [
       {
         title: 'Heart Rate',
@@ -124,10 +131,10 @@ export const MissionOverviewView: React.FC<MissionOverviewViewProps> = ({
         flag: sleepDelta <= -1.0 ? 'WARNING' : 'NORMAL',
       },
       {
-        title: 'Stress & Mood',
-        value: moodAvg,
+        title: 'Mood & Stress',
+        value: `M ${latest.mood_score.toFixed(1)} · S ${latest.stress_level.toFixed(1)}`,
         unit: '/10',
-        baseline: `Baseline M ${astronaut.baseline_mood_score.toFixed(1)} / S ${astronaut.baseline_stress_score.toFixed(1)} (${moodDelta >= 0 ? '+' : ''}${moodDelta.toFixed(1)}/${stressDelta >= 0 ? '+' : ''}${stressDelta.toFixed(1)})`,
+        baseline: `Mood ${latest.mood_score.toFixed(1)} (Base ${astronaut.baseline_mood_score.toFixed(1)}, ${moodDelta >= 0 ? '+' : ''}${moodDelta.toFixed(1)}) · Stress ${latest.stress_level.toFixed(1)} (Base ${astronaut.baseline_stress_score.toFixed(1)}, ${stressDelta >= 0 ? '+' : ''}${stressDelta.toFixed(1)})`,
         time: recordedTime,
         regionId: 'head_and_brain',
         icon: Activity,
@@ -167,7 +174,7 @@ export const MissionOverviewView: React.FC<MissionOverviewViewProps> = ({
         id: 'gravity',
         name: 'Gravity Fields',
         status: statusFor('gravity', 'Gravity Fields'),
-        metric: `${latest.gravity_g} g field`,
+        metric: gravityRegimeLabel(latest.gravity_g),
         sub: `Strength ${latest.muscle_strength_idx.toFixed(0)}% · Bal ${latest.balance_score.toFixed(0)}%`,
       },
       {
@@ -198,7 +205,7 @@ export const MissionOverviewView: React.FC<MissionOverviewViewProps> = ({
             </div>
             <div className="flex flex-wrap gap-1.5 mt-1">
               <span className="px-2.5 py-1 rounded-full text-xs bg-[#0B0D1A] text-[#A5D8FF] border border-[#A5D8FF]/30">
-                {latest.gravity_g}g Field
+                {gravityRegimeLabel(latest.gravity_g)}
               </span>
               <span className="px-2.5 py-1 rounded-full text-xs bg-[#0B0D1A] text-[#E5E5E4] border border-white/10">
                 {provenanceLabel(latest.provenance)}
@@ -228,15 +235,32 @@ export const MissionOverviewView: React.FC<MissionOverviewViewProps> = ({
           </div>
 
           {/* Question 3: Should I take any action? */}
-          <div className="rounded-xl bg-[#0B0D1A] p-3.5 h-full flex flex-col justify-between">
-            <h2 className="text-sm font-semibold text-[#A5D8FF] mb-1.5">Should I take any action?</h2>
-            <p className="text-sm text-[#E5E5E4] leading-snug">
-              {glance?.should_i_take_action || 'Continue daily countermeasures and log check-ins.'}
-            </p>
+          <div className="rounded-xl bg-[#0B0D1A] p-3.5 h-full flex flex-col justify-between gap-2">
+            <div>
+              <h2 className="text-sm font-semibold text-[#A5D8FF] mb-1.5">Should I take any action?</h2>
+              <p className="text-sm text-[#E5E5E4] leading-snug">
+                {glance?.should_i_take_action || 'Continue daily countermeasures and log check-ins.'}
+              </p>
+            </div>
+            {assessment.exercise_contraindicated && (
+              <div className="rounded-lg bg-red-500/15 border border-red-400/40 px-2.5 py-1.5 text-xs font-semibold text-red-200">
+                Exercise Hold Active — Medical triage priority before physical countermeasures
+              </div>
+            )}
           </div>
 
           {/* Action CTA Column */}
           <div className="flex flex-col gap-2.5">
+            {(assessment.overall_status === 'CRITICAL' || assessment.auto_emergency_recommended) && (
+              <button
+                type="button"
+                onClick={onOpenEmergency}
+                className="w-full px-4 py-3 rounded-xl text-sm font-bold bg-red-500/20 hover:bg-red-500/30 border border-red-400/60 text-red-100 inline-flex items-center justify-center gap-2"
+              >
+                <ShieldAlert className="w-4 h-4 text-red-300" />
+                <span>Launch Emergency Checklist</span>
+              </button>
+            )}
             <button
               type="button"
               onClick={() => onStartAssessment(selectedRegionId)}
@@ -245,7 +269,7 @@ export const MissionOverviewView: React.FC<MissionOverviewViewProps> = ({
               <span>Start Assessment</span>
               <ArrowRight className="w-4 h-4" />
             </button>
-            {assessment.overall_status !== 'NORMAL' && (
+            {assessment.overall_status === 'WARNING' && !assessment.auto_emergency_recommended && (
               <button
                 type="button"
                 onClick={onOpenEmergency}
@@ -285,7 +309,7 @@ export const MissionOverviewView: React.FC<MissionOverviewViewProps> = ({
 
         <div className="mb-3.5 rounded-2xl bg-[#121522] border border-[#A5D8FF]/20 px-4 py-3 text-xs text-[#E5E5E4]/85 leading-relaxed">
           <span className="font-semibold text-[#A5D8FF]">Baseline Recommendation: </span>
-          Avoid arbitrary thresholds or assuming that ordinary Earth-based clinical reference ranges automatically represent safe operating limits for astronauts in microgravity (0g) or partial gravity ({latest.gravity_g.toFixed(2)}g). Status flags measure relative drift from personal pre-flight and early-transit baselines alongside mission-configured prototype rules.
+          Avoid arbitrary thresholds or assuming that ordinary Earth-based clinical reference ranges automatically represent safe operating limits under current {gravityRegimeLabel(latest.gravity_g)} conditions. Status flags measure relative drift from personal mission baselines alongside mission-configured prototype safety rules.
         </div>
 
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-3.5">
@@ -389,10 +413,10 @@ export const MissionOverviewView: React.FC<MissionOverviewViewProps> = ({
           {/* Metric Series Selector */}
           <div className="flex flex-wrap gap-2 mb-4">
             {[
-              { id: 'sleep_mood', label: 'Sleep & Mood' },
+              { id: 'sleep_mood', label: 'Sleep, Mood & Stress' },
               { id: 'vitals', label: 'Heart Rate & SpO₂' },
               { id: 'radiation', label: 'Radiation (mSv vs mGy)' },
-              { id: 'environment', label: 'Cabin CO₂ & Humidity' },
+              { id: 'environment', label: 'CO₂, Temp & Humidity' },
             ].map((t) => (
               <button
                 key={t.id}
@@ -408,17 +432,30 @@ export const MissionOverviewView: React.FC<MissionOverviewViewProps> = ({
             ))}
           </div>
 
-          <div className="h-[260px] w-full">
+          <div className="h-[275px] w-full">
             <ResponsiveContainer width="100%" height="100%">
-              <LineChart data={slicedHistory} margin={{ top: 8, right: 12, left: -12, bottom: 4 }}>
+              <LineChart data={slicedHistory} margin={{ top: 8, right: 12, left: -8, bottom: 4 }}>
                 <CartesianGrid stroke="rgba(255,255,255,0.06)" vertical={false} />
                 <XAxis
-                  dataKey="mission_day"
+                  dataKey="solLabel"
                   stroke="#94a3b8"
                   fontSize={12}
-                  tickFormatter={(d) => `Sol ${d}`}
                 />
-                <YAxis stroke="#94a3b8" fontSize={12} />
+                <YAxis
+                  yAxisId="left"
+                  stroke="#A5D8FF"
+                  fontSize={11}
+                  width={44}
+                  unit={trendTab === 'sleep_mood' ? 'h' : ''}
+                />
+                <YAxis
+                  yAxisId="right"
+                  orientation="right"
+                  stroke="#E5E5E4"
+                  fontSize={11}
+                  width={44}
+                  domain={trendTab === 'sleep_mood' ? [0, 10] : ['auto', 'auto']}
+                />
                 <Tooltip
                   contentStyle={{
                     backgroundColor: '#121522',
@@ -427,40 +464,45 @@ export const MissionOverviewView: React.FC<MissionOverviewViewProps> = ({
                     fontSize: '12px',
                     color: '#FAF9FA',
                   }}
-                  labelFormatter={(d) => `Mission Sol ${d}`}
+                  labelFormatter={(label) => `Mission ${label}`}
                 />
+                <Legend wrapperStyle={{ fontSize: '12px', paddingTop: '6px', color: '#E5E5E4' }} />
                 {trendTab === 'sleep_mood' && (
                   <>
                     <ReferenceLine
+                      yAxisId="left"
                       y={astronaut.baseline_sleep_hrs}
                       stroke="rgba(165,216,255,0.45)"
                       strokeDasharray="4 4"
                     />
-                    <Line type="monotone" dataKey="sleep_duration_hrs" name="Sleep (hrs)" stroke="#A5D8FF" strokeWidth={2.5} dot={false} />
-                    <Line type="monotone" dataKey="mood_score" name="Mood (/10)" stroke="#E5E5E4" strokeWidth={2} dot={false} />
+                    <Line yAxisId="left" type="monotone" dataKey="sleep_duration_hrs" name="Sleep (hrs)" stroke="#A5D8FF" strokeWidth={2.5} dot={false} />
+                    <Line yAxisId="right" type="monotone" dataKey="mood_score" name="Mood (/10)" stroke="#34D399" strokeWidth={2} dot={false} />
+                    <Line yAxisId="right" type="monotone" dataKey="stress_level" name="Stress (/10)" stroke="#FBBF24" strokeWidth={2} dot={false} />
                   </>
                 )}
                 {trendTab === 'vitals' && (
                   <>
                     <ReferenceLine
+                      yAxisId="left"
                       y={astronaut.baseline_hr_bpm}
                       stroke="rgba(165,216,255,0.45)"
                       strokeDasharray="4 4"
                     />
-                    <Line type="monotone" dataKey="heart_rate_bpm" name="Heart Rate (BPM)" stroke="#A5D8FF" strokeWidth={2.5} dot={false} />
-                    <Line type="monotone" dataKey="spo2_pct" name="SpO₂ (%)" stroke="#E5E5E4" strokeWidth={2} dot={false} />
+                    <Line yAxisId="left" type="monotone" dataKey="heart_rate_bpm" name="Heart Rate (BPM)" stroke="#A5D8FF" strokeWidth={2.5} dot={false} />
+                    <Line yAxisId="right" type="monotone" dataKey="spo2_pct" name="SpO₂ (%)" stroke="#E5E5E4" strokeWidth={2} dot={false} />
                   </>
                 )}
                 {trendTab === 'radiation' && (
                   <>
-                    <Line type="monotone" dataKey="equivalent_dose_rate_msv_day" name="Equivalent Rate (mSv/day)" stroke="#A5D8FF" strokeWidth={2.5} dot={false} />
-                    <Line type="monotone" dataKey="absorbed_dose_mgy" name="Absorbed Dose (mGy/day)" stroke="#E5E5E4" strokeWidth={2} dot={false} />
+                    <Line yAxisId="left" type="monotone" dataKey="equivalent_dose_rate_msv_day" name="Equivalent Rate (mSv/day)" stroke="#A5D8FF" strokeWidth={2.5} dot={false} />
+                    <Line yAxisId="right" type="monotone" dataKey="absorbed_dose_mgy" name="Absorbed Dose (mGy/day)" stroke="#E5E5E4" strokeWidth={2} dot={false} />
                   </>
                 )}
                 {trendTab === 'environment' && (
                   <>
-                    <Line type="monotone" dataKey="co2_mmhg" name="Cabin CO₂ (mmHg)" stroke="#A5D8FF" strokeWidth={2.5} dot={false} />
-                    <Line type="monotone" dataKey="humidity_pct" name="Relative Humidity (%)" stroke="#E5E5E4" strokeWidth={2} dot={false} />
+                    <Line yAxisId="left" type="monotone" dataKey="co2_mmhg" name="Cabin CO₂ (mmHg)" stroke="#A5D8FF" strokeWidth={2.5} dot={false} />
+                    <Line yAxisId="right" type="monotone" dataKey="cabin_temp_c" name="Cabin Temp (°C)" stroke="#FBBF24" strokeWidth={2} dot={false} />
+                    <Line yAxisId="right" type="monotone" dataKey="humidity_pct" name="Relative Humidity (%)" stroke="#E5E5E4" strokeWidth={2} dot={false} />
                   </>
                 )}
               </LineChart>
@@ -468,15 +510,22 @@ export const MissionOverviewView: React.FC<MissionOverviewViewProps> = ({
           </div>
         </div>
 
-        {/* Right: Important Alerts & Suggested Next Actions */}
+        {/* Right: Important Alerts & Prioritized Recommendations */}
         <div className="mc-card p-5 lg:p-6 flex flex-col justify-between gap-4">
           <div className="space-y-4">
             <div className="flex items-center justify-between gap-2">
               <h2 className="text-xl font-semibold text-[#FAF9FA]">Important Alerts &amp; Actions</h2>
               <span className="text-xs text-[#E5E5E4]/75">
-                {assessment.active_alerts.length} active
+                {assessment.active_alerts.length} alerts · {assessment.recommendations?.length || 0} actions
               </span>
             </div>
+
+            {assessment.exercise_contraindicated && (
+              <div className="rounded-xl bg-red-500/15 border border-red-400/50 p-3 text-xs text-red-100 leading-relaxed">
+                <span className="font-bold">EXERCISE CONTRAINDICATED: </span>
+                Routine exercise countermeasures are automatically suspended while critical physiological flags or red-flag symptoms remain active.
+              </div>
+            )}
 
             {assessment.active_alerts.length === 0 ? (
               <div className="rounded-xl bg-[#0B0D1A] p-4 text-sm text-[#E5E5E4]">
@@ -484,7 +533,7 @@ export const MissionOverviewView: React.FC<MissionOverviewViewProps> = ({
               </div>
             ) : (
               <div className="space-y-2.5">
-                {assessment.active_alerts.slice(0, 4).map((al) => {
+                {assessment.active_alerts.map((al) => {
                   const meta = statusMeta(al.severity);
                   return (
                     <div key={al.id} className="rounded-xl bg-[#0B0D1A] p-3.5 space-y-1.5">
@@ -504,6 +553,42 @@ export const MissionOverviewView: React.FC<MissionOverviewViewProps> = ({
                     </div>
                   );
                 })}
+              </div>
+            )}
+
+            {assessment.recommendations && assessment.recommendations.length > 0 && (
+              <div className="space-y-2 pt-2 border-t border-white/[0.08]">
+                <h3 className="text-xs font-semibold uppercase tracking-wider text-[#A5D8FF]">
+                  Prioritized Action Stack
+                </h3>
+                <div className="space-y-2">
+                  {assessment.recommendations.map((rec, idx) => (
+                    <div
+                      key={`${rec.hazard}-${idx}`}
+                      className={`rounded-xl p-3 border text-xs leading-relaxed ${rec.priority === 'IMMEDIATE'
+                        ? 'bg-red-500/10 border-red-400/40 text-red-100'
+                        : rec.priority === 'HIGH'
+                          ? 'bg-amber-500/10 border-amber-400/35 text-amber-100'
+                          : 'bg-[#0B0D1A] border-white/[0.08] text-[#E5E5E4]'
+                        }`}
+                    >
+                      <div className="flex items-center justify-between gap-2 mb-1">
+                        <span className="font-semibold">{rec.hazard}</span>
+                        <span
+                          className={`px-2 py-0.5 rounded-full text-[11px] font-bold ${rec.priority === 'IMMEDIATE'
+                            ? 'bg-red-500/25 text-red-200'
+                            : rec.priority === 'HIGH'
+                              ? 'bg-amber-500/25 text-amber-200'
+                              : 'bg-white/10 text-[#E5E5E4]'
+                            }`}
+                        >
+                          {rec.priority}
+                        </span>
+                      </div>
+                      <p>{rec.action}</p>
+                    </div>
+                  ))}
+                </div>
               </div>
             )}
           </div>

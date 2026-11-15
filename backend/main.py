@@ -6,13 +6,16 @@ Store-and-Forward Earth Telemetry Queue, and Local NASA/CSA RAG Retrieval Engine
 
 from __future__ import annotations
 import os
+from datetime import datetime, timezone
 from typing import Dict, Any, Optional
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
+import database
 from models import (
     AstronautBaseline,
+    BaselineUpdateInput,
     RadiationConfigLimits,
     EnvironmentalConfigLimits,
     HealthMeasurementSubmission,
@@ -27,7 +30,6 @@ from models import (
 )
 from database import (
     init_db,
-    DB_PATH,
     fetch_all_telemetry,
     fetch_system_state,
     update_system_state,
@@ -39,6 +41,7 @@ from database import (
     insert_psych_questionnaire,
 )
 from assessment_engine import evaluate_integrated_health, generate_local_emergency_protocol
+from marscare_enhancer import normalize_comm_mode
 from knowledge_base import rag_engine, KNOWLEDGE_CORPUS
 from dataclasses import asdict
 
@@ -69,7 +72,7 @@ def _build_full_state() -> Dict[str, Any]:
         history = fetch_all_telemetry()
 
     latest = history[-1]
-    baseline_dict = fetch_system_state("baseline")
+    baseline_dict = fetch_system_state("baseline") or {}
     baseline = AstronautBaseline(**baseline_dict) if baseline_dict else AstronautBaseline()
     baseline.mission_day = latest["mission_day"]
     baseline.current_phase = MissionPhase(latest["mission_phase"])
@@ -81,10 +84,13 @@ def _build_full_state() -> Dict[str, Any]:
     env_limits_dict = fetch_system_state("env_limits")
     env_limits = EnvironmentalConfigLimits(**env_limits_dict) if env_limits_dict else EnvironmentalConfigLimits()
 
-    comm_state = fetch_system_state("comm_state")
+    comm_state = fetch_system_state("comm_state") or {}
     reports = fetch_store_forward_reports()
     pending_count = sum(1 for r in reports if r["transmission_status"] != "SYNCHRONIZED_ACK")
     comm_state["pending_reports_count"] = pending_count
+
+    psych_history = fetch_psych_questionnaires()
+    latest_psych = psych_history[0] if psych_history else None
 
     assessment = evaluate_integrated_health(
         latest=latest,
@@ -93,12 +99,12 @@ def _build_full_state() -> Dict[str, Any]:
         rad_limits=rad_limits,
         env_limits=env_limits,
         comm_state=comm_state,
+        latest_psych=latest_psych,
     )
-
-    psych_history = fetch_psych_questionnaires()
 
     return {
         "astronaut": baseline.model_dump(),
+        "baseline_history": fetch_system_state("baseline_history") or [],
         "latest_telemetry": latest,
         "telemetry_history": history,
         "assessment": assessment,
@@ -129,6 +135,46 @@ def get_system_state() -> Dict[str, Any]:
     return _build_full_state()
 
 
+@app.get("/api/baseline")
+def get_baseline_calibration() -> Dict[str, Any]:
+    return {
+        "baseline": fetch_system_state("baseline") or AstronautBaseline().model_dump(),
+        "history": fetch_system_state("baseline_history") or [],
+    }
+
+
+@app.post("/api/baseline")
+def update_baseline_calibration(payload: BaselineUpdateInput) -> Dict[str, Any]:
+    current = fetch_system_state("baseline") or AstronautBaseline().model_dump()
+    updates = payload.model_dump(exclude_none=True)
+    reason = str(updates.pop("reason", "Crew / CMO Baseline Calibration")).strip() or "Crew / CMO Baseline Calibration"
+    changed_fields: Dict[str, Any] = {}
+    for k, v in updates.items():
+        val = v.value if hasattr(v, "value") else v
+        if current.get(k) != val:
+            changed_fields[k] = {"from": current.get(k), "to": val}
+        current[k] = val
+
+    validated = AstronautBaseline(**current).model_dump()
+    update_system_state("baseline", validated)
+
+    if changed_fields:
+        hist = fetch_system_state("baseline_history") or []
+        if not isinstance(hist, list):
+            hist = []
+        hist.insert(
+            0,
+            {
+                "timestamp": datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z"),
+                "reason": reason,
+                "changed_fields": changed_fields,
+            },
+        )
+        update_system_state("baseline_history", hist[:25])
+
+    return _build_full_state()
+
+
 @app.post("/api/measurements")
 def submit_health_measurement(submission: HealthMeasurementSubmission) -> Dict[str, Any]:
     data = submission.model_dump()
@@ -138,7 +184,7 @@ def submit_health_measurement(submission: HealthMeasurementSubmission) -> Dict[s
 
     state = _build_full_state()
     assessment = state["assessment"]
-    comm_state = state["comm_state"]
+    comm_norm = normalize_comm_mode(state["comm_state"])
 
     # Automatically queue a store-and-forward report if WARNING or CRITICAL
     if assessment["overall_status"] in ("WARNING", "CRITICAL"):
@@ -162,7 +208,7 @@ def submit_health_measurement(submission: HealthMeasurementSubmission) -> Dict[s
                 "co2_mmhg": inserted["co2_mmhg"],
             },
             provenance=inserted["provenance"],
-            comm_online=False,
+            comm_online=comm_norm["mode"] == "CONNECTED",
         )
         state = _build_full_state()
 
@@ -395,24 +441,33 @@ def load_demo_scenario(scenario_id: str) -> Dict[str, Any]:
         },
     }
 
-    if scenario_id not in scenarios:
+    alias_map = {
+        "nominal": "NOMINAL_MARS_SOL",
+        "spe_storm": "SPE_SOLAR_STORM_CRITICAL",
+        "co2_sleep_fatigue": "ENV_CO2_CONFINEMENT_WARNING",
+        "critical_orthostatic": "GRAVITY_ORTHOSTATIC_CRITICAL",
+    }
+    canonical_id = alias_map.get(scenario_id, scenario_id)
+
+    if canonical_id not in scenarios:
         raise HTTPException(status_code=404, detail=f"Scenario '{scenario_id}' not found")
 
-    inserted = insert_telemetry_record(scenarios[scenario_id])
+    inserted = insert_telemetry_record(scenarios[canonical_id])
     state = _build_full_state()
     assessment = state["assessment"]
+    comm_norm = normalize_comm_mode(state["comm_state"])
     if assessment["overall_status"] in ("WARNING", "CRITICAL"):
         triggered_hazards = [
             h for h, st in assessment["hazard_statuses"].items() if st in ("WARNING", "CRITICAL")
         ]
         create_store_forward_report(
             mission_day=inserted["mission_day"],
-            title=f"Sol {inserted['mission_day']} Scenario [{scenario_id}] Assessment Packet",
-            summary=scenarios[scenario_id]["notes"],
+            title=f"Sol {inserted['mission_day']} Scenario [{canonical_id}] Assessment Packet",
+            summary=scenarios[canonical_id]["notes"],
             risk_level=assessment["overall_status"],
             hazard_triggers=triggered_hazards,
             payload={
-                "scenario_id": scenario_id,
+                "scenario_id": canonical_id,
                 "overall_status": assessment["overall_status"],
                 "equivalent_dose_rate_msv_day": inserted["equivalent_dose_rate_msv_day"],
                 "heart_rate_bpm": inserted["heart_rate_bpm"],
@@ -420,7 +475,7 @@ def load_demo_scenario(scenario_id: str) -> Dict[str, Any]:
                 "sleep_duration_hrs": inserted["sleep_duration_hrs"],
             },
             provenance=inserted["provenance"],
-            comm_online=False,
+            comm_online=comm_norm["mode"] == "CONNECTED",
         )
         state = _build_full_state()
 
@@ -429,26 +484,11 @@ def load_demo_scenario(scenario_id: str) -> Dict[str, Any]:
 
 @app.post("/api/psych-questionnaire")
 def submit_psych_questionnaire(payload: PsychQuestionnaireInput) -> Dict[str, Any]:
+    """
+    Persist structured psychological & behavioral check-in independently in psych_questionnaires.
+    Does NOT duplicate physiological telemetry_records or overwrite vital-sign values.
+    """
     insert_psych_questionnaire(payload.model_dump())
-    # Also update latest telemetry psychological fields as a new user-entered check-in
-    history = fetch_all_telemetry()
-    latest = dict(history[-1])
-    latest.pop("id", None)
-    latest["mission_day"] = payload.mission_day
-    latest["provenance"] = payload.provenance.value
-    latest["mood_score"] = float(payload.emotional_condition_rating)
-    latest["stress_level"] = float(payload.psychological_stress_rating)
-    latest["motivation_level"] = float(payload.motivation_rating)
-    latest["fatigue_level"] = float(payload.fatigue_rating)
-    latest["workload_score"] = float(payload.concentration_workload_rating)
-    latest["feeling_isolated"] = payload.isolation_feeling_rating >= 6
-    latest["concentration_difficulty"] = payload.concentration_workload_rating >= 7
-    if payload.sleep_difficulty_rating >= 7:
-        latest["sleep_irregularities"] = max(int(latest["sleep_irregularities"]), 3)
-    latest["notes"] = (
-        f"Self-Assessment Questionnaire logged: {payload.journal_reflection or 'Routine behavioural check-in.'}"
-    )
-    insert_telemetry_record(latest)
     return _build_full_state()
 
 
@@ -488,26 +528,51 @@ def sync_reports_to_earth() -> Dict[str, Any]:
 
 @app.post("/api/emergency/escalate")
 def trigger_emergency_escalation(payload: EmergencyEscalationInput) -> Dict[str, Any]:
-    comm_state = fetch_system_state("comm_state")
+    state = _build_full_state()
+    comm_state = state["comm_state"]
+    latest = state["latest_telemetry"]
+    vital_summary = (payload.vital_signs_summary or "").strip()
+    if not vital_summary:
+        vital_summary = (
+            f"Sol {latest['mission_day']} | HR {latest['heart_rate_bpm']} bpm | "
+            f"BP {latest['systolic_bp_mmhg']}/{latest['diastolic_bp_mmhg']} mmHg | "
+            f"SpO2 {latest['spo2_pct']}% | RR {latest.get('respiratory_rate_bpm', 16)}/min | "
+            f"Temp {latest['body_temp_c']}°C | CO2 {latest['co2_mmhg']} mmHg | "
+            f"Rad {latest['equivalent_dose_rate_msv_day']} mSv/day ({latest['absorbed_dose_mgy']} mGy)"
+        )
+    symptoms = list(payload.reported_symptoms or [])
+    if not symptoms:
+        for flag, label in [
+            (latest.get("chest_discomfort"), "Chest discomfort"),
+            (latest.get("palpitations"), "Palpitations"),
+            (latest.get("shortness_of_breath"), "Shortness of breath"),
+            (latest.get("faintness_presyncope"), "Faintness / presyncope"),
+        ]:
+            if flag and label not in symptoms:
+                symptoms.append(label)
+        for s in latest.get("reported_symptoms") or []:
+            if s not in symptoms:
+                symptoms.append(s)
+
     protocol = generate_local_emergency_protocol(
         trigger_hazard=payload.trigger_hazard,
         severity=payload.severity.value,
-        reported_symptoms=payload.reported_symptoms,
-        vital_signs_summary=payload.vital_signs_summary,
+        reported_symptoms=symptoms,
+        vital_signs_summary=vital_summary,
         mission_phase=payload.mission_phase.value,
         comm_state=comm_state,
     )
-    state = _build_full_state()
-    mission_day = state["latest_telemetry"]["mission_day"]
+    mission_day = latest["mission_day"]
+    comm_norm = normalize_comm_mode(comm_state)
     create_store_forward_report(
         mission_day=mission_day,
         title=f"PRIORITY-1 EMERGENCY ESCALATION: {protocol['protocol_id']}",
-        summary=f"{protocol['protocol_title']} triggered for {payload.trigger_hazard}. Vital summary: {payload.vital_signs_summary}",
+        summary=f"{protocol['protocol_title']} triggered for {payload.trigger_hazard}. Vital summary: {vital_summary}",
         risk_level="CRITICAL",
         hazard_triggers=[payload.trigger_hazard],
         payload=protocol,
         provenance=DataProvenance.USER_ENTERED.value,
-        comm_online=False,
+        comm_online=comm_norm["mode"] == "CONNECTED",
     )
     updated_state = _build_full_state()
     return {"protocol": protocol, "state": updated_state}
@@ -526,6 +591,7 @@ def query_rag_knowledge_base(payload: RAGQueryInput) -> Dict[str, Any]:
             "mission_phase": latest["mission_phase"],
             "gravity_g": latest["gravity_g"],
             "overall_status": state["assessment"]["overall_status"],
+            "hazard_statuses": state["assessment"].get("hazard_statuses", {}),
             "provenance": latest.get("provenance", "SYNTHETIC_DEMO"),
             "latest_telemetry": latest,
             "baseline": state["astronaut"],
@@ -559,8 +625,8 @@ def update_configured_limits(payload: ConfigLimitsUpdate) -> Dict[str, Any]:
 
 @app.post("/api/reset")
 def reset_demo_database() -> Dict[str, Any]:
-    if os.path.exists(DB_PATH):
-        os.remove(DB_PATH)
+    if os.path.exists(database.DB_PATH):
+        os.remove(database.DB_PATH)
     init_db()
     return _build_full_state()
 

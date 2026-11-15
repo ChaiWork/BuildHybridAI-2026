@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   ResponsiveContainer,
   AreaChart,
@@ -7,6 +7,7 @@ import {
   YAxis,
   Tooltip,
   CartesianGrid,
+  Legend,
 } from 'recharts';
 import {
   Activity,
@@ -18,7 +19,7 @@ import {
   Wind,
 } from 'lucide-react';
 import { FullSystemState } from '../types';
-import { apiRequest, statusMeta } from './uiHelpers';
+import { apiRequest, gravityRegimeLabel, statusMeta } from './uiHelpers';
 
 interface SpaceflightHazardsViewProps {
   state: FullSystemState;
@@ -76,23 +77,79 @@ export const SpaceflightHazardsView: React.FC<SpaceflightHazardsViewProps> = ({
   const [savingLimits, setSavingLimits] = useState(false);
   const [limitNotice, setLimitNotice] = useState<string | null>(null);
 
+  useEffect(() => {
+    setWarnLimit(state.radiation_limits.daily_equivalent_warn_msv);
+    setCo2Limit(state.environmental_limits.co2_warn_mmhg);
+    setGravityExplorer(
+      state.latest_telemetry.gravity_g === 0
+        ? '0g'
+        : state.latest_telemetry.gravity_g >= 0.9
+          ? '1g'
+          : '0.38g',
+    );
+  }, [
+    state.radiation_limits.daily_equivalent_warn_msv,
+    state.environmental_limits.co2_warn_mmhg,
+    state.latest_telemetry.gravity_g,
+  ]);
+
+  const seriesMeta = useMemo(() => {
+    if (activeHazardId === 'radiation') {
+      return {
+        title: '14-Sol Equivalent Rate (mSv/d) & Absorbed Dose (mGy/d)',
+        primaryName: 'Equivalent (mSv/day)',
+        secondaryName: 'Absorbed (mGy/day)',
+      };
+    }
+    if (activeHazardId === 'isolation') {
+      return {
+        title: '14-Sol Sleep Duration (hrs) & Mood (/10)',
+        primaryName: 'Sleep (hrs)',
+        secondaryName: 'Mood (/10)',
+      };
+    }
+    if (activeHazardId === 'gravity') {
+      return {
+        title: '14-Sol Resting HR (BPM) & Muscle Strength (%)',
+        primaryName: 'Heart Rate (BPM)',
+        secondaryName: 'Muscle Strength (%)',
+      };
+    }
+    if (activeHazardId === 'environment') {
+      return {
+        title: '14-Sol Cabin CO₂ (mmHg) & Cabin Temp (°C)',
+        primaryName: 'Cabin CO₂ (mmHg)',
+        secondaryName: 'Cabin Temp (°C)',
+      };
+    }
+    return {
+      title: '14-Sol One-Way Signal Delay (min) & Sleep Quality (%)',
+      primaryName: 'One-Way Delay (min)',
+      secondaryName: 'Sleep Quality (%)',
+    };
+  }, [activeHazardId]);
+
   const chartData = useMemo(() => {
     const slice = state.telemetry_history.slice(-14);
+    const counts: Record<number, number> = {};
     return slice.map((r) => {
+      counts[r.mission_day] = (counts[r.mission_day] || 0) + 1;
+      const solLabel =
+        counts[r.mission_day] > 1 ? `S${r.mission_day}#${counts[r.mission_day]}` : `S${r.mission_day}`;
       if (activeHazardId === 'radiation') {
-        return { sol: r.mission_day, primary: r.equivalent_dose_rate_msv_day, secondary: r.absorbed_dose_mgy };
+        return { solLabel, primary: r.equivalent_dose_rate_msv_day, secondary: r.absorbed_dose_mgy };
       }
       if (activeHazardId === 'isolation') {
-        return { sol: r.mission_day, primary: r.sleep_duration_hrs, secondary: r.mood_score };
+        return { solLabel, primary: r.sleep_duration_hrs, secondary: r.mood_score };
       }
       if (activeHazardId === 'gravity') {
-        return { sol: r.mission_day, primary: r.heart_rate_bpm, secondary: r.muscle_strength_idx };
+        return { solLabel, primary: r.heart_rate_bpm, secondary: r.muscle_strength_idx };
       }
       if (activeHazardId === 'environment') {
-        return { sol: r.mission_day, primary: r.co2_mmhg, secondary: r.humidity_pct };
+        return { solLabel, primary: r.co2_mmhg, secondary: r.cabin_temp_c };
       }
       return {
-        sol: r.mission_day,
+        solLabel,
         primary: state.comm_state.one_way_delay_minutes,
         secondary: r.sleep_quality_pct,
       };
@@ -170,7 +227,7 @@ export const SpaceflightHazardsView: React.FC<SpaceflightHazardsViewProps> = ({
             </span>
           </div>
           <p className="text-sm text-[#E5E5E4]/80 mt-1">
-            Structured autonomous brief tailored for Mission Sol {latest.mission_day} ({latest.gravity_g}g).
+            Structured autonomous brief tailored for Mission Sol {latest.mission_day} · {gravityRegimeLabel(latest.gravity_g)}.
           </p>
         </div>
 
@@ -241,7 +298,10 @@ export const SpaceflightHazardsView: React.FC<SpaceflightHazardsViewProps> = ({
               </div>
               <div className="text-sm font-medium text-[#FAF9FA]">{GRAVITY_GUIDE[gravityExplorer].label}</div>
               <p className="text-xs text-[#E5E5E4]/85 leading-relaxed">
-                {GRAVITY_GUIDE[gravityExplorer].context} {GRAVITY_GUIDE[gravityExplorer].focus}
+                {GRAVITY_GUIDE[gravityExplorer].context}{' '}
+                {state.assessment.exercise_contraindicated
+                  ? 'EXERCISE HOLD ACTIVE: Suspend physical countermeasures until cardiopulmonary & critical triage flags resolve.'
+                  : GRAVITY_GUIDE[gravityExplorer].focus}
               </p>
             </div>
           )}
@@ -251,20 +311,10 @@ export const SpaceflightHazardsView: React.FC<SpaceflightHazardsViewProps> = ({
         <div className="mc-card p-5 lg:p-6 space-y-4">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <h2 className="text-lg font-semibold text-[#A5D8FF]">2. What has changed?</h2>
-            <span className="text-xs text-[#E5E5E4]/75">
-              {activeMod.id === 'radiation'
-                ? '14-Sol Equiv. Dose Rate (mSv/day)'
-                : activeMod.id === 'isolation'
-                  ? '14-Sol Sleep Duration (hrs)'
-                  : activeMod.id === 'gravity'
-                    ? '14-Sol Resting Heart Rate (BPM)'
-                    : activeMod.id === 'environment'
-                      ? '14-Sol Cabin CO₂ (mmHg)'
-                      : '14-Sol One-Way Signal Delay (min)'}
-            </span>
+            <span className="text-xs text-[#E5E5E4]/75">{seriesMeta.title}</span>
           </div>
           <p className="text-sm text-[#FAF9FA] leading-relaxed">{activeMod.what_has_changed}</p>
-          <div className="h-[170px] w-full rounded-xl bg-[#0B0D1A] p-3">
+          <div className="h-[195px] w-full rounded-xl bg-[#0B0D1A] p-3">
             <ResponsiveContainer width="100%" height="100%">
               <AreaChart data={chartData}>
                 <defs>
@@ -274,8 +324,9 @@ export const SpaceflightHazardsView: React.FC<SpaceflightHazardsViewProps> = ({
                   </linearGradient>
                 </defs>
                 <CartesianGrid stroke="rgba(255,255,255,0.05)" vertical={false} />
-                <XAxis dataKey="sol" stroke="#94a3b8" fontSize={11} tickFormatter={(s) => `S${s}`} />
-                <YAxis stroke="#94a3b8" fontSize={11} width={36} />
+                <XAxis dataKey="solLabel" stroke="#94a3b8" fontSize={11} />
+                <YAxis yAxisId="left" stroke="#A5D8FF" fontSize={11} width={38} />
+                <YAxis yAxisId="right" orientation="right" stroke="#FBBF24" fontSize={11} width={38} />
                 <Tooltip
                   contentStyle={{
                     backgroundColor: '#121522',
@@ -284,9 +335,27 @@ export const SpaceflightHazardsView: React.FC<SpaceflightHazardsViewProps> = ({
                     fontSize: '12px',
                     color: '#FAF9FA',
                   }}
-                  labelFormatter={(s) => `Sol ${s}`}
+                  labelFormatter={(s) => `Mission ${s}`}
                 />
-                <Area type="monotone" dataKey="primary" stroke="#A5D8FF" strokeWidth={2} fill="url(#hazArea)" />
+                <Legend wrapperStyle={{ fontSize: '11px', color: '#E5E5E4' }} />
+                <Area
+                  yAxisId="left"
+                  type="monotone"
+                  dataKey="primary"
+                  name={seriesMeta.primaryName}
+                  stroke="#A5D8FF"
+                  strokeWidth={2}
+                  fill="url(#hazArea)"
+                />
+                <Area
+                  yAxisId="right"
+                  type="monotone"
+                  dataKey="secondary"
+                  name={seriesMeta.secondaryName}
+                  stroke="#FBBF24"
+                  strokeWidth={1.8}
+                  fillOpacity={0}
+                />
               </AreaChart>
             </ResponsiveContainer>
           </div>
@@ -310,6 +379,12 @@ export const SpaceflightHazardsView: React.FC<SpaceflightHazardsViewProps> = ({
         {/* Section 4: What should I do next? */}
         <div className="mc-card p-5 lg:p-6 space-y-4">
           <h2 className="text-lg font-semibold text-[#A5D8FF]">4. What should I do next?</h2>
+          {state.assessment.exercise_contraindicated && (
+            <div className="rounded-xl bg-red-500/15 border border-red-400/50 p-3 text-xs text-red-100 leading-relaxed">
+              <span className="font-bold">EXERCISE HOLD ACTIVE: </span>
+              Routine exercise protocols are suspended until active CRITICAL or cardiopulmonary flags resolve.
+            </div>
+          )}
           <p className="text-sm text-[#FAF9FA] leading-relaxed">{activeMod.what_should_i_do_next}</p>
 
           {(activeMod.id === 'radiation' || activeMod.id === 'environment') && (
@@ -320,9 +395,11 @@ export const SpaceflightHazardsView: React.FC<SpaceflightHazardsViewProps> = ({
               </div>
               <div className="flex flex-wrap items-center gap-3">
                 {activeMod.id === 'radiation' ? (
-                  <label className="flex items-center gap-2 text-xs text-[#E5E5E4]">
+                  <label htmlFor="hazard-warn-msv-input" className="flex items-center gap-2 text-xs text-[#E5E5E4]">
                     <span>Daily Equiv. Warn (mSv/day):</span>
                     <input
+                      id="hazard-warn-msv-input"
+                      name="hazard_warn_msv"
                       type="number"
                       step="0.1"
                       value={warnLimit}
@@ -331,9 +408,11 @@ export const SpaceflightHazardsView: React.FC<SpaceflightHazardsViewProps> = ({
                     />
                   </label>
                 ) : (
-                  <label className="flex items-center gap-2 text-xs text-[#E5E5E4]">
+                  <label htmlFor="hazard-warn-co2-input" className="flex items-center gap-2 text-xs text-[#E5E5E4]">
                     <span>Cabin CO₂ Warn (mmHg):</span>
                     <input
+                      id="hazard-warn-co2-input"
+                      name="hazard_warn_co2"
                       type="number"
                       step="0.1"
                       value={co2Limit}

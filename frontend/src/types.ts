@@ -60,6 +60,10 @@ export interface TelemetryRecord {
   body_temp_c: number;
   dizziness_severity: number;
   faintness_presyncope: boolean;
+  chest_discomfort?: boolean;
+  palpitations?: boolean;
+  shortness_of_breath?: boolean;
+  reported_symptoms?: string[];
   physical_activity_mins: number;
   exercise_performance_pct: number;
   muscle_strength_idx: number;
@@ -150,12 +154,24 @@ export interface RAGCitation {
   relevance_score: number;
 }
 
+export interface RAGSectionItem {
+  doc_id: string;
+  title: string;
+  agency: string;
+  year: string;
+  excerpt: string;
+  provenance: string;
+}
+
 export interface RAGAnalysisResponse {
   query: string;
   engine_mode: string;
   model_used?: string | null;
   latency_ms?: number;
   sufficient_evidence: boolean;
+  conflict_notice?: string | null;
+  scientific_evidence?: RAGSectionItem[];
+  operational_procedures?: RAGSectionItem[];
   answer: string;
   safety_notice: string;
   citations: RAGCitation[];
@@ -242,6 +258,10 @@ export interface IntegratedAssessment {
   gravity_g: number;
   provenance: DataProvenance;
   rule_disclaimer: string;
+  exercise_contraindicated?: boolean;
+  auto_emergency_recommended?: boolean;
+  recommended_emergency_hazard?: string | null;
+  protocol_gap_notice?: string | null;
   hazard_statuses: Record<string, RiskLevel>;
   baseline_comparisons: BaselineComparison[];
   findings: AssessmentFinding[];
@@ -255,6 +275,12 @@ export interface IntegratedAssessment {
   hazard_modules_4step?: HazardModule4Step[];
   structured_explanation?: StructuredExplanation;
   guidance_tiers?: Record<string, GuidanceTierItem[]>;
+}
+
+export interface BaselineHistoryItem {
+  timestamp: string;
+  reason: string;
+  changed_fields: Record<string, { from: any; to: any }>;
 }
 
 export interface StoreForwardReport {
@@ -312,11 +338,24 @@ export interface EmergencyProtocolResult {
   vital_signs_summary: string;
   immediate_steps: string[];
   supporting_citation: string;
+  protocol_gap_notice?: string;
   safety_disclaimer: string;
+}
+
+export interface SyncResponse {
+  sync_result: {
+    synchronized_count: number;
+    remaining_queued: number;
+    status: string;
+    message?: string;
+    synced_at?: string;
+  };
+  state: FullSystemState;
 }
 
 export interface FullSystemState {
   astronaut: AstronautProfile;
+  baseline_history?: BaselineHistoryItem[];
   latest_telemetry: TelemetryRecord;
   telemetry_history: TelemetryRecord[];
   assessment: IntegratedAssessment;

@@ -53,6 +53,25 @@ class AstronautBaseline(BaseModel):
     provenance: DataProvenance = DataProvenance.SYNTHETIC_DEMO
 
 
+class BaselineUpdateInput(BaseModel):
+    name: Optional[str] = Field(default=None, min_length=1, max_length=80)
+    role: Optional[str] = Field(default=None, min_length=1, max_length=120)
+    mission_day: Optional[int] = Field(default=None, ge=1, le=2000)
+    current_phase: Optional[MissionPhase] = None
+    gravity_g: Optional[float] = Field(default=None, ge=0.0, le=2.0)
+    baseline_hr_bpm: Optional[float] = Field(default=None, ge=35.0, le=140.0)
+    baseline_systolic_mmhg: Optional[float] = Field(default=None, ge=75.0, le=180.0)
+    baseline_diastolic_mmhg: Optional[float] = Field(default=None, ge=45.0, le=120.0)
+    baseline_spo2_pct: Optional[float] = Field(default=None, ge=85.0, le=100.0)
+    baseline_temp_c: Optional[float] = Field(default=None, ge=35.0, le=38.5)
+    baseline_sleep_hrs: Optional[float] = Field(default=None, ge=3.0, le=12.0)
+    baseline_mood_score: Optional[float] = Field(default=None, ge=1.0, le=10.0)
+    baseline_stress_score: Optional[float] = Field(default=None, ge=1.0, le=10.0)
+    baseline_muscle_strength_idx: Optional[float] = Field(default=None, ge=40.0, le=130.0)
+    baseline_balance_score: Optional[float] = Field(default=None, ge=30.0, le=100.0)
+    reason: Optional[str] = Field(default="Crew profile calibration", max_length=240)
+
+
 class RadiationConfigLimits(BaseModel):
     daily_equivalent_warn_msv: float = Field(
         default=1.5,
@@ -128,6 +147,9 @@ class HealthMeasurementSubmission(BaseModel):
     body_temp_c: float = Field(default=36.7, ge=34.0, le=42.0)
     dizziness_severity: int = Field(default=1, ge=0, le=3, description="0=None, 1=Mild, 2=Moderate, 3=Severe")
     faintness_presyncope: bool = False
+    chest_discomfort: bool = False
+    palpitations: bool = False
+    shortness_of_breath: bool = False
     physical_activity_mins: float = Field(default=95.0, ge=0.0, le=300.0)
     exercise_performance_pct: float = Field(default=91.0, ge=0.0, le=150.0)
     muscle_strength_idx: float = Field(default=93.5, ge=0.0, le=150.0)
@@ -149,6 +171,7 @@ class HealthMeasurementSubmission(BaseModel):
     env_warning_event: str = Field(default="NONE")
     respiratory_symptoms: List[str] = Field(default_factory=list)
     infection_symptoms: List[str] = Field(default_factory=list)
+    reported_symptoms: List[str] = Field(default_factory=list)
     hygiene_adherence_pct: float = Field(default=96.0)
     notes: str = Field(default="Routine Sol check-in following Martian surface EVA preparation.")
 
@@ -185,10 +208,10 @@ class StoreForwardReportCreate(BaseModel):
 
 
 class EmergencyEscalationInput(BaseModel):
-    trigger_hazard: str
+    trigger_hazard: str = "Primary Medical Triage"
     severity: RiskLevel = RiskLevel.CRITICAL
-    reported_symptoms: List[str]
-    vital_signs_summary: str
+    reported_symptoms: List[str] = Field(default_factory=list)
+    vital_signs_summary: str = ""
     mission_phase: MissionPhase = MissionPhase.MARS_SURFACE
 
 
