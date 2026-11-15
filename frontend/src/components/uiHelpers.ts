@@ -62,7 +62,16 @@ export async function apiRequest<T>(path: string, options?: RequestInit): Promis
     ...options,
   });
   if (!res.ok) {
-    const msg = await res.text();
+    const raw = await res.text();
+    let msg = raw;
+    try {
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed.detail === 'string') {
+        msg = parsed.detail;
+      }
+    } catch {
+      // Keep plain text error body when not JSON
+    }
     throw new Error(msg || `Request failed: ${res.status}`);
   }
   return res.json() as Promise<T>;
@@ -256,6 +265,108 @@ export function buildClientFallbackEmergencyProtocol(
     safety_disclaimer:
       'Deterministic local client fallback active. Queue this incident packet manually once local backend sync restores.',
   };
+}
+
+export function deviceStatusMeta(status?: string): {
+  label: string;
+  badgeClass: string;
+  dotClass: string;
+} {
+  const s = (status || 'not_connected').toLowerCase();
+  if (s === 'connected') {
+    return {
+      label: 'Connected',
+      badgeClass: 'bg-emerald-500/15 text-emerald-300 border border-emerald-500/30',
+      dotClass: 'bg-emerald-400',
+    };
+  }
+  if (s === 'simulation') {
+    return {
+      label: 'Simulation Mode',
+      badgeClass: 'bg-amber-500/15 text-amber-300 border border-amber-500/30',
+      dotClass: 'bg-amber-400',
+    };
+  }
+  if (s === 'error' || s === 'unavailable') {
+    return {
+      label: s === 'error' ? 'Connection Error' : 'Hardware Unavailable',
+      badgeClass: 'bg-red-500/15 text-red-300 border border-red-500/30',
+      dotClass: 'bg-red-400',
+    };
+  }
+  if (s === 'disconnected') {
+    return {
+      label: 'Disconnected',
+      badgeClass: 'bg-[#181C2E] text-[#E5E5E4]/85 border border-white/15',
+      dotClass: 'bg-[#E5E5E4]/50',
+    };
+  }
+  return {
+    label: 'Not Connected',
+    badgeClass: 'bg-[#181C2E] text-[#E5E5E4]/80 border border-white/15',
+    dotClass: 'bg-[#E5E5E4]/40',
+  };
+}
+
+export function classificationMeta(cls: string): {
+  label: string;
+  badgeClass: string;
+} {
+  switch (cls) {
+    case 'SUPPORTED_CONNECTION':
+      return {
+        label: 'Supported Connection',
+        badgeClass: 'bg-emerald-500/15 text-emerald-300 border border-emerald-500/30',
+      };
+    case 'SIMULATION_AVAILABLE':
+      return {
+        label: 'Simulation Available',
+        badgeClass: 'bg-[#181C2E] text-[#A5D8FF] border border-[#A5D8FF]/30',
+      };
+    case 'IMPORT_SUPPORTED':
+      return {
+        label: 'Import Supported',
+        badgeClass: 'bg-[#181C2E] text-[#FAF9FA] border border-white/20',
+      };
+    case 'GUIDED_EXAMINATION':
+      return {
+        label: 'Guided Examination',
+        badgeClass: 'bg-[#181C2E] text-[#E5E5E4] border border-white/15',
+      };
+    default:
+      return {
+        label: 'Not Integrated',
+        badgeClass: 'bg-[#181C2E] text-[#E5E5E4]/65 border border-white/10',
+      };
+  }
+}
+
+export function deviceImportTemplate(deviceId: string): string {
+  switch (deviceId) {
+    case 'CSA_BIO_MONITOR':
+      return 'measurement_type,value,unit,recorded_at\nheart_rate,74,BPM,2026-11-15T08:00:00Z\nrespiratory_rate,16,/min,2026-11-15T08:00:00Z\nspo2,98.2,%,2026-11-15T08:00:00Z\nphysical_activity,85,mins,2026-11-15T08:00:00Z';
+    case 'BP_CUFF_CARDIOBREATH':
+      return 'measurement_type,value,unit,recorded_at\nsystolic_bp,116,mmHg,2026-11-15T08:05:00Z\ndiastolic_bp,74,mmHg,2026-11-15T08:05:00Z';
+    case 'ARCHER_ACTIGRAPHY':
+      return 'measurement_type,value,unit,recorded_at\nsleep_duration,6.9,hrs,2026-11-15T07:30:00Z\nsleep_quality,82,%,2026-11-15T07:30:00Z\nphysical_activity,92,mins,2026-11-15T07:30:00Z';
+    case 'EVARM_MOSFET':
+      return 'measurement_type,value,unit,location,recorded_at\nabsorbed_dose,0.52,mGy,Left Torso EVA Badge,2026-11-15T09:15:00Z';
+    case 'AUTO_BUBBLE_READER':
+    case 'RADI_N2_BUBBLE':
+      return 'measurement_type,value,unit,location,recorded_at\nneutron_bubble_count,18,bubbles,Columbus Rack 3,2026-11-15T09:30:00Z';
+    case 'CANS_SPECTROMETER':
+      return 'measurement_type,value,unit,recorded_at\nabsorbed_dose,0.49,mGy,2026-11-15T09:45:00Z\nequivalent_dose_rate,1.24,mSv/day,2026-11-15T09:45:00Z\ncumulative_effective_dose,169.6,mSv,2026-11-15T09:45:00Z';
+    case 'TEMPUS_PRO':
+      return 'measurement_type,value,unit,recorded_at\nheart_rate,72,BPM,2026-11-15T10:00:00Z\nsystolic_bp,114,mmHg,2026-11-15T10:00:00Z\ndiastolic_bp,73,mmHg,2026-11-15T10:00:00Z\nspo2,98.4,%,2026-11-15T10:00:00Z\nrespiratory_rate,15,/min,2026-11-15T10:00:00Z\nskin_or_body_temp,36.7,°C,2026-11-15T10:00:00Z';
+    case 'POSTUROGRAPHY_BALANCE':
+      return 'measurement_type,value,unit,recorded_at\nbalance_score,86,/100,2026-11-15T10:15:00Z';
+    case 'CYCLE_ERGOMETER_ASTROFIT':
+      return 'measurement_type,value,unit,recorded_at\nexercise_performance,91,%,2026-11-15T10:30:00Z\nergometer_power,175,W,2026-11-15T10:30:00Z\nphysical_activity,38,mins,2026-11-15T10:30:00Z';
+    case 'TBONE_3D_SCANNER':
+      return 'measurement_type,value,unit,recorded_at\ntbone_vbmd,312.4,mg HA/cm³,2026-11-15T11:00:00Z';
+    default:
+      return 'measurement_type,value,unit,recorded_at\nheart_rate,68,BPM,2026-11-15T08:00:00Z';
+  }
 }
 
 

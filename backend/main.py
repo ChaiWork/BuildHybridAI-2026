@@ -1,13 +1,14 @@
 """
-FastAPI Backend for TARSCARE AI – Autonomous Astronaut Health Monitoring and Decision Support System.
+FastAPI Backend for TARS Care AI – Autonomous Astronaut Health Monitoring and Decision Support System.
 Local-first architecture with SQLite persistence, Integrated 5-Hazard Assessment Engine,
 Store-and-Forward Earth Telemetry Queue, and Local NASA/CSA RAG Retrieval Engine.
 """
 
 from __future__ import annotations
 import os
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -24,13 +25,38 @@ from models import (
     StoreForwardReportCreate,
     EmergencyEscalationInput,
     RAGQueryInput,
+    SansAssessmentInput,
+    MedKitAdjustInput,
+    FlightSurgeonConsultInput,
+    CrewSelectInput,
+    CrewPinVerifyInput,
+    CrewPinUpdateInput,
     DataProvenance,
     MissionPhase,
     RiskLevel,
 )
+from dataclasses import asdict
+from hardware_devices import HARDWARE_CATALOG
+from hardware_routes import (
+    _normalize_device_states_for_crew,
+    hardware_router,
+    register_state_builder,
+)
+from donki_client import build_donki_public_state, trigger_background_auto_sync
+from donki_routes import donki_router, register_donki_state_builder
+from insight_client import build_insight_public_state, trigger_background_insight_auto_sync
+from insight_routes import insight_router, register_insight_state_builder
 from database import (
     init_db,
+    get_active_crew_id,
+    set_active_crew_id,
+    fetch_crew_baseline,
+    fetch_crew_baseline_history,
+    save_crew_baseline,
     fetch_all_telemetry,
+    fetch_device_measurements,
+    fetch_hardware_examinations,
+    fetch_biosample_records,
     fetch_system_state,
     update_system_state,
     insert_telemetry_record,
@@ -39,16 +65,37 @@ from database import (
     synchronize_queued_reports,
     fetch_psych_questionnaires,
     insert_psych_questionnaire,
+    fetch_sans_assessments,
+    insert_sans_assessment,
+    fetch_medical_kit_items,
+    adjust_medical_kit_item,
 )
 from assessment_engine import evaluate_integrated_health, generate_local_emergency_protocol
 from marscare_enhancer import normalize_comm_mode
 from knowledge_base import rag_engine, KNOWLEDGE_CORPUS
+from mission_ops import (
+    CREW_ORDER,
+    build_flight_surgeon_consult_packet,
+    hash_privacy_pin,
+    verify_privacy_pin,
+)
 from dataclasses import asdict
 
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    init_db()
+    if not os.environ.get("PYTEST_CURRENT_TEST"):
+        trigger_background_auto_sync(max_age_hours=6.0)
+        trigger_background_insight_auto_sync(max_age_hours=12.0)
+    yield
+
+
 app = FastAPI(
-    title="TARSCARE AI Backend API",
+    title="TARS Care AI Backend API",
     description="Autonomous Astronaut Health Monitoring and Decision Support System (NASA Space Apps Challenge 2026)",
     version="1.0.0",
+    lifespan=lifespan,
 )
 
 app.add_middleware(
@@ -60,19 +107,79 @@ app.add_middleware(
 )
 
 
-@app.on_event("startup")
-def on_startup() -> None:
-    init_db()
+def _build_crew_fleet_matrix(
+    rad_limits: RadiationConfigLimits,
+    env_limits: EnvironmentalConfigLimits,
+    comm_state: Dict[str, Any],
+) -> List[Dict[str, Any]]:
+    """Build multi-crew CMO triage summary without leaking private journal reflections."""
+    baselines = fetch_system_state("crew_baselines") or {}
+    crew_ids = list(dict.fromkeys(list(CREW_ORDER) + list(baselines.keys())))
+    matrix: List[Dict[str, Any]] = []
+    for cid in crew_ids:
+        hist = fetch_all_telemetry(crew_id=cid)
+        if not hist:
+            continue
+        latest = hist[-1]
+        b_dict = fetch_crew_baseline(cid)
+        b_model = AstronautBaseline(**b_dict) if b_dict else AstronautBaseline()
+        psych_list = fetch_psych_questionnaires(crew_id=cid)
+        sans_list = fetch_sans_assessments(crew_id=cid)
+        eval_res = evaluate_integrated_health(
+            latest=latest,
+            history=hist,
+            baseline=b_model,
+            rad_limits=rad_limits,
+            env_limits=env_limits,
+            comm_state=comm_state,
+            latest_psych=psych_list[0] if psych_list else None,
+            skip_rag=True,
+            latest_sans=sans_list[0] if sans_list else None,
+        )
+        hr = float(latest.get("heart_rate_bpm", 68.0))
+        recs = eval_res.get("recommendations") or []
+        top_action = recs[0]["action"] if recs else "Nominal baseline monitoring."
+        flagged_hazards = [
+            hz for hz, st in (eval_res.get("hazard_statuses") or {}).items() if st in ("WARNING", "CRITICAL")
+        ]
+        matrix.append({
+            "crew_id": cid,
+            "name": b_model.name,
+            "role": b_model.role,
+            "mission_day": latest["mission_day"],
+            "overall_status": eval_res["overall_status"],
+            "eva_status": (eval_res.get("eva_readiness") or {}).get("status", "GO"),
+            "eva_score_pct": (eval_res.get("eva_readiness") or {}).get("score_pct", 100),
+            "exercise_contraindicated": bool(eval_res.get("exercise_contraindicated", False)),
+            "heart_rate_bpm": round(hr),
+            "baseline_hr_bpm": round(b_model.baseline_hr_bpm),
+            "hr_delta": round(hr - b_model.baseline_hr_bpm),
+            "bp_summary": f"{round(float(latest['systolic_bp_mmhg']))}/{round(float(latest['diastolic_bp_mmhg']))}",
+            "spo2_pct": round(float(latest["spo2_pct"]), 1),
+            "cumulative_dose_msv": round(float(latest["cumulative_effective_dose_msv"]), 1),
+            "sleep_duration_hrs": round(float(latest["sleep_duration_hrs"]), 1),
+            "dizziness_severity": int(latest.get("dizziness_severity", 0)),
+            "sans_flagged": bool(latest.get("visual_disturbance_sans") or (sans_list and (sans_list[0].get("wavy_lines_detected") or len(sans_list[0].get("scotoma_cells") or []) > 0))),
+            "flagged_hazards": flagged_hazards,
+            "priority_headline": top_action,
+            "behavioral_checkins_count": len(psych_list),
+            "private_reflections_redacted": True,
+        })
+    rank_map = {"CRITICAL": 0, "WARNING": 1, "NORMAL": 2}
+    matrix.sort(key=lambda item: (rank_map.get(item["overall_status"], 9), item["crew_id"]))
+    return matrix
 
 
 def _build_full_state() -> Dict[str, Any]:
-    history = fetch_all_telemetry()
+    active_crew_id = get_active_crew_id()
+    history = fetch_all_telemetry(crew_id=active_crew_id)
     if not history:
         init_db()
-        history = fetch_all_telemetry()
+        active_crew_id = get_active_crew_id()
+        history = fetch_all_telemetry(crew_id=active_crew_id)
 
     latest = history[-1]
-    baseline_dict = fetch_system_state("baseline") or {}
+    baseline_dict = fetch_crew_baseline(active_crew_id) or {}
     baseline = AstronautBaseline(**baseline_dict) if baseline_dict else AstronautBaseline()
     baseline.mission_day = latest["mission_day"]
     baseline.current_phase = MissionPhase(latest["mission_phase"])
@@ -89,8 +196,10 @@ def _build_full_state() -> Dict[str, Any]:
     pending_count = sum(1 for r in reports if r["transmission_status"] != "SYNCHRONIZED_ACK")
     comm_state["pending_reports_count"] = pending_count
 
-    psych_history = fetch_psych_questionnaires()
+    psych_history = fetch_psych_questionnaires(crew_id=active_crew_id)
     latest_psych = psych_history[0] if psych_history else None
+    sans_history = fetch_sans_assessments(crew_id=active_crew_id)
+    latest_sans = sans_history[0] if sans_history else None
 
     assessment = evaluate_integrated_health(
         latest=latest,
@@ -100,11 +209,16 @@ def _build_full_state() -> Dict[str, Any]:
         env_limits=env_limits,
         comm_state=comm_state,
         latest_psych=latest_psych,
+        latest_sans=latest_sans,
     )
 
+    pins = fetch_system_state("crew_privacy_pins") or {}
+    pin_hint = (pins.get(active_crew_id) or {}).get("hint", "Default demo PIN: 2026")
+
     return {
+        "active_crew_id": active_crew_id,
         "astronaut": baseline.model_dump(),
-        "baseline_history": fetch_system_state("baseline_history") or [],
+        "baseline_history": fetch_crew_baseline_history(active_crew_id),
         "latest_telemetry": latest,
         "telemetry_history": history,
         "assessment": assessment,
@@ -113,6 +227,17 @@ def _build_full_state() -> Dict[str, Any]:
         "comm_state": comm_state,
         "store_forward_reports": reports,
         "psych_questionnaires": psych_history,
+        "sans_assessments": sans_history,
+        "medical_kit": fetch_medical_kit_items(),
+        "crew_fleet_matrix": _build_crew_fleet_matrix(rad_limits, env_limits, comm_state),
+        "privacy_pin_hint": pin_hint,
+        "devices_catalog": HARDWARE_CATALOG,
+        "device_states": _normalize_device_states_for_crew(active_crew_id),
+        "device_measurements": fetch_device_measurements(crew_id=active_crew_id, limit=80),
+        "hardware_examinations": fetch_hardware_examinations(crew_id=active_crew_id, limit=50),
+        "biosample_records": fetch_biosample_records(crew_id=active_crew_id, limit=50),
+        "donki_state": build_donki_public_state(limit=250),
+        "insight_state": build_insight_public_state(limit=14),
         "knowledge_corpus": [asdict(doc) for doc in KNOWLEDGE_CORPUS],
         "local_ai_status": get_local_ai_status(),
     }
@@ -123,11 +248,17 @@ from marscare_routes import initialize_marscare_rag, marscare_router
 
 initialize_marscare_rag()
 app.include_router(marscare_router, prefix="/api")
+register_state_builder(_build_full_state)
+app.include_router(hardware_router)
+register_donki_state_builder(_build_full_state)
+app.include_router(donki_router)
+register_insight_state_builder(_build_full_state)
+app.include_router(insight_router)
 
 
 @app.get("/api/health")
 def health_check() -> Dict[str, Any]:
-    return {"status": "ok", "system": "TARSCARE AI", "offline_ready": True}
+    return {"status": "ok", "system": "TARS Care AI", "offline_ready": True}
 
 
 @app.get("/api/state")
@@ -137,15 +268,17 @@ def get_system_state() -> Dict[str, Any]:
 
 @app.get("/api/baseline")
 def get_baseline_calibration() -> Dict[str, Any]:
+    cid = get_active_crew_id()
     return {
-        "baseline": fetch_system_state("baseline") or AstronautBaseline().model_dump(),
-        "history": fetch_system_state("baseline_history") or [],
+        "baseline": fetch_crew_baseline(cid) or AstronautBaseline().model_dump(),
+        "history": fetch_crew_baseline_history(cid),
     }
 
 
 @app.post("/api/baseline")
 def update_baseline_calibration(payload: BaselineUpdateInput) -> Dict[str, Any]:
-    current = fetch_system_state("baseline") or AstronautBaseline().model_dump()
+    cid = get_active_crew_id()
+    current = fetch_crew_baseline(cid) or AstronautBaseline().model_dump()
     updates = payload.model_dump(exclude_none=True)
     reason = str(updates.pop("reason", "Crew / CMO Baseline Calibration")).strip() or "Crew / CMO Baseline Calibration"
     changed_fields: Dict[str, Any] = {}
@@ -156,21 +289,16 @@ def update_baseline_calibration(payload: BaselineUpdateInput) -> Dict[str, Any]:
         current[k] = val
 
     validated = AstronautBaseline(**current).model_dump()
-    update_system_state("baseline", validated)
-
-    if changed_fields:
-        hist = fetch_system_state("baseline_history") or []
-        if not isinstance(hist, list):
-            hist = []
-        hist.insert(
-            0,
-            {
-                "timestamp": datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z"),
-                "reason": reason,
-                "changed_fields": changed_fields,
-            },
-        )
-        update_system_state("baseline_history", hist[:25])
+    audit_entry = (
+        {
+            "timestamp": datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z"),
+            "reason": reason,
+            "changed_fields": changed_fields,
+        }
+        if changed_fields
+        else None
+    )
+    save_crew_baseline(cid, validated, audit_entry)
 
     return _build_full_state()
 
@@ -629,4 +757,126 @@ def reset_demo_database() -> Dict[str, Any]:
         os.remove(database.DB_PATH)
     init_db()
     return _build_full_state()
+
+
+@app.get("/api/crew/matrix")
+def get_crew_matrix() -> Dict[str, Any]:
+    rad_limits = RadiationConfigLimits(**(fetch_system_state("rad_limits") or {}))
+    env_limits = EnvironmentalConfigLimits(**(fetch_system_state("env_limits") or {}))
+    comm_state = fetch_system_state("comm_state") or {}
+    return {
+        "active_crew_id": get_active_crew_id(),
+        "crew_fleet_matrix": _build_crew_fleet_matrix(rad_limits, env_limits, comm_state),
+    }
+
+
+@app.post("/api/crew/select")
+def select_active_crew(payload: CrewSelectInput) -> Dict[str, Any]:
+    try:
+        set_active_crew_id(payload.crew_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return _build_full_state()
+
+
+@app.post("/api/crew/unlock-reflections")
+def unlock_crew_reflections(payload: CrewPinVerifyInput) -> Dict[str, Any]:
+    pins = fetch_system_state("crew_privacy_pins") or {}
+    entry = pins.get(payload.crew_id)
+    if not entry:
+        raise HTTPException(status_code=404, detail=f"Unknown crew profile: {payload.crew_id}")
+    if not verify_privacy_pin(payload.pin, entry.get("pin_hash", "")):
+        raise HTTPException(status_code=403, detail="Invalid Privacy PIN. Behavioral reflections remain locked.")
+    return {
+        "unlocked": True,
+        "crew_id": payload.crew_id,
+        "message": "Behavioral reflections unlocked locally for this session.",
+    }
+
+
+@app.post("/api/crew/pin")
+def update_crew_privacy_pin(payload: CrewPinUpdateInput) -> Dict[str, Any]:
+    pins = fetch_system_state("crew_privacy_pins") or {}
+    entry = pins.get(payload.crew_id)
+    if not entry:
+        raise HTTPException(status_code=404, detail=f"Unknown crew profile: {payload.crew_id}")
+    if not verify_privacy_pin(payload.current_pin, entry.get("pin_hash", "")):
+        raise HTTPException(status_code=403, detail="Current PIN did not match.")
+    pins[payload.crew_id] = {
+        "pin_hash": hash_privacy_pin(payload.new_pin),
+        "hint": "Custom crew PIN configured",
+    }
+    update_system_state("crew_privacy_pins", pins)
+    return {
+        "updated": True,
+        "crew_id": payload.crew_id,
+        "privacy_pin_hint": "Custom crew PIN configured",
+    }
+
+
+@app.get("/api/sans/assessments")
+def get_sans_assessments() -> Dict[str, Any]:
+    cid = get_active_crew_id()
+    return {"crew_id": cid, "sans_assessments": fetch_sans_assessments(cid)}
+
+
+@app.post("/api/sans/assessments")
+def submit_sans_assessment(payload: SansAssessmentInput) -> Dict[str, Any]:
+    data = payload.model_dump()
+    data["provenance"] = payload.provenance.value
+    record = insert_sans_assessment(data)
+    state = _build_full_state()
+    return {"sans_record": record, "state": state}
+
+
+@app.get("/api/medkit")
+def get_medical_kit() -> Dict[str, Any]:
+    return {"medical_kit": fetch_medical_kit_items()}
+
+
+@app.post("/api/medkit/adjust")
+def adjust_medical_kit(payload: MedKitAdjustInput) -> Dict[str, Any]:
+    try:
+        updated = adjust_medical_kit_item(
+            item_code=payload.item_code,
+            quantity_delta=payload.quantity_delta,
+            set_quantity=payload.set_quantity,
+            notes=payload.notes,
+            mark_inspected=payload.mark_inspected,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return {"item": updated, "medical_kit": fetch_medical_kit_items(), "state": _build_full_state()}
+
+
+@app.post("/api/consult/flight-surgeon-draft")
+def draft_flight_surgeon_consult(payload: FlightSurgeonConsultInput) -> Dict[str, Any]:
+    state = _build_full_state()
+    sans_list = state.get("sans_assessments") or []
+    packet = build_flight_surgeon_consult_packet(
+        astronaut=state["astronaut"],
+        baseline_history=state.get("baseline_history") or [],
+        latest=state["latest_telemetry"],
+        assessment=state["assessment"],
+        comm_state=state["comm_state"],
+        med_kit=state.get("medical_kit") or [],
+        latest_sans=(sans_list[0] if (payload.include_sans and sans_list) else None),
+        cmo_notes=payload.cmo_notes,
+    )
+    comm_norm = normalize_comm_mode(state["comm_state"])
+    report = create_store_forward_report(
+        mission_day=state["latest_telemetry"]["mission_day"],
+        title=packet["title"],
+        summary=packet["summary"],
+        risk_level=payload.urgency.value,
+        hazard_triggers=packet["hazard_triggers"],
+        payload=packet["payload"],
+        provenance=DataProvenance.USER_ENTERED.value,
+        comm_online=comm_norm["mode"] == "CONNECTED",
+    )
+    return {
+        "report": report,
+        "markdown_preview": packet["markdown_preview"],
+        "state": _build_full_state(),
+    }
 

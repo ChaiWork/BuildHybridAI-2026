@@ -251,6 +251,100 @@ export interface CommModeInfo {
   summary: string;
 }
 
+export interface EvaReadiness {
+  status: 'GO' | 'CAUTION' | 'HOLD';
+  score_pct: number;
+  summary: string;
+  blocking_factors: string[];
+  advisory_factors: string[];
+  pre_eva_checklist: { item: string; ok: boolean; detail: string }[];
+}
+
+export interface PredictiveRunways {
+  disclaimer: string;
+  co2: {
+    current_mmhg: number;
+    slope_per_sol: number;
+    days_to_critical: number | null;
+    warn_limit_mmhg: number;
+    crit_limit_mmhg: number;
+    summary: string;
+    projected: { step: string; value: number }[];
+  };
+  radiation_budget: {
+    cumulative_msv: number;
+    rolling_avg_msv_day: number;
+    warn_threshold_msv: number;
+    reference_limit_msv: number;
+    est_sols_to_warn: number;
+    est_sols_to_limit: number;
+    summary: string;
+    projected: { step: string; value: number }[];
+  };
+  sleep_debt: {
+    debt_7sol_hrs: number;
+    estimated_recovery_nights: number;
+    summary: string;
+  };
+  musculoskeletal: {
+    current_strength_idx: number;
+    slope_per_sol: number;
+    summary: string;
+  };
+}
+
+export interface SansAssessmentRecord {
+  id?: number;
+  crew_id?: string;
+  timestamp: string;
+  mission_day: number;
+  eye_tested: 'LEFT' | 'RIGHT' | 'BOTH' | string;
+  wavy_lines_detected: boolean;
+  scotoma_cells: string[];
+  near_acuity_shift: boolean;
+  notes: string;
+  provenance: DataProvenance;
+}
+
+export interface MedicalKitItem {
+  id?: number;
+  item_code: string;
+  name: string;
+  bay_location: string;
+  category: string;
+  quantity: number;
+  unit: string;
+  min_threshold: number;
+  expiry_date: string;
+  cmo_auth_required: boolean;
+  notes: string;
+  last_inspected: string;
+}
+
+export interface CrewFleetMember {
+  crew_id: string;
+  name: string;
+  role: string;
+  mission_day: number;
+  overall_status: RiskLevel;
+  eva_status: 'GO' | 'CAUTION' | 'HOLD';
+  eva_score_pct: number;
+  exercise_contraindicated: boolean;
+  heart_rate_bpm: number;
+  baseline_hr_bpm: number;
+  hr_delta: number;
+  bp_summary: string;
+  spo2_pct: number;
+  cumulative_dose_msv: number;
+  sleep_duration_hrs: number;
+  dizziness_severity: number;
+  sans_flagged: boolean;
+  flagged_hazards: string[];
+  priority_headline: string;
+  behavioral_checkins_count: number;
+  private_reflections_redacted: boolean;
+}
+
 export interface IntegratedAssessment {
   overall_status: RiskLevel;
   mission_day: number;
@@ -275,6 +369,9 @@ export interface IntegratedAssessment {
   hazard_modules_4step?: HazardModule4Step[];
   structured_explanation?: StructuredExplanation;
   guidance_tiers?: Record<string, GuidanceTierItem[]>;
+  eva_readiness?: EvaReadiness;
+  predictive_runways?: PredictiveRunways;
+  latest_sans?: SansAssessmentRecord | null;
 }
 
 export interface BaselineHistoryItem {
@@ -354,6 +451,7 @@ export interface SyncResponse {
 }
 
 export interface FullSystemState {
+  active_crew_id?: string;
   astronaut: AstronautProfile;
   baseline_history?: BaselineHistoryItem[];
   latest_telemetry: TelemetryRecord;
@@ -392,7 +490,302 @@ export interface FullSystemState {
   };
   store_forward_reports: StoreForwardReport[];
   psych_questionnaires: PsychQuestionnaireRecord[];
+  sans_assessments?: SansAssessmentRecord[];
+  medical_kit?: MedicalKitItem[];
+  crew_fleet_matrix?: CrewFleetMember[];
+  privacy_pin_hint?: string;
+  devices_catalog?: DeviceCatalogEntry[];
+  device_states?: Record<string, DeviceConnectionState>;
+  device_measurements?: DeviceMeasurementRecord[];
+  hardware_examinations?: HardwareExamRecord[];
+  biosample_records?: BiosampleRecord[];
+  donki_state?: DonkiStateSummary;
+  insight_state?: InsightStateSummary;
   knowledge_corpus: KnowledgeDocItem[];
   local_ai_status?: LocalAIStatus;
+}
+
+export interface DonkiServiceCatalogItem {
+  id: string;
+  name: string;
+  endpoint: string;
+  regime_scope: 'HELIOSPHERIC_DEEP_SPACE' | 'EARTH_MAGNETOSPHERE' | string;
+  description: string;
+}
+
+export interface DonkiServiceStatusItem {
+  status: 'OK' | 'RATE_LIMITED' | 'ERROR' | string;
+  count: number;
+  endpoint: string;
+  synced_at: string;
+  error: string;
+}
+
+export interface DonkiConfigSummary {
+  key_status: string;
+  key_source: string;
+  using_custom_key: boolean;
+  auto_advisory_in_eva: boolean;
+  base_url: string;
+  services_count: number;
+}
+
+export interface DonkiSyncMeta {
+  last_sync_at: string;
+  last_sync_status: 'NEVER_SYNCED' | 'SYNCED' | 'PARTIAL' | 'ERROR' | 'BLOCKED_OFFLINE' | string;
+  last_sync_message: string;
+  last_window: {
+    start_date: string;
+    end_date: string;
+  };
+  service_statuses: Record<string, DonkiServiceStatusItem>;
+}
+
+export interface DonkiAdvisorySummary {
+  total_cached_events: number;
+  sep_count: number;
+  critical_flare_count: number;
+  fast_cme_count: number;
+  enlil_alert_count: number;
+  earth_magnetosphere_count: number;
+  advisories: string[];
+  has_heliospheric_watch: boolean;
+}
+
+export interface DonkiEventItem {
+  event_uid: string;
+  service_type: string;
+  activity_id: string;
+  start_time: string;
+  severity: 'CRITICAL' | 'WARNING' | 'INFO' | string;
+  regime_scope: 'HELIOSPHERIC_DEEP_SPACE' | 'EARTH_MAGNETOSPHERE' | string;
+  title: string;
+  summary: string;
+  linked_ids: string[];
+  source_url: string;
+  metrics: Record<string, unknown>;
+  data_provenance: string;
+  fetched_at: string;
+}
+
+export interface DonkiStateSummary {
+  config: DonkiConfigSummary;
+  services: DonkiServiceCatalogItem[];
+  sync_meta: DonkiSyncMeta;
+  service_counts: Record<string, number>;
+  advisory_summary: DonkiAdvisorySummary;
+  events: DonkiEventItem[];
+}
+
+export interface InsightStatSummary {
+  av?: number;
+  mn?: number;
+  mx?: number;
+  ct?: number;
+}
+
+export interface InsightWindBin {
+  sector: number;
+  compass_degrees: number;
+  compass_point: string;
+  compass_right: number;
+  compass_up: number;
+  ct: number;
+}
+
+export interface InsightWeatherSol {
+  sol_id: string;
+  first_utc: string;
+  last_utc: string;
+  season: string;
+  northern_season: string;
+  southern_season: string;
+  month_ordinal?: number | null;
+  at: InsightStatSummary;
+  hws: InsightStatSummary;
+  pre: InsightStatSummary;
+  wd: {
+    most_common?: {
+      compass_degrees: number;
+      compass_point: string;
+      ct: number;
+    } | null;
+    bins?: InsightWindBin[];
+  };
+  validity: Record<string, { valid: boolean; hours_count: number }>;
+  missing_sensors: string[];
+  data_provenance: string;
+  fetched_at: string;
+}
+
+export interface InsightStateSummary {
+  config: {
+    key_status: string;
+    key_source: string;
+    using_custom_key: boolean;
+    endpoint?: string;
+  };
+  sync_meta: {
+    last_sync_at: string;
+    last_sync_status: 'NEVER_SYNCED' | 'SYNCED' | 'EMPTY_GAP' | 'RATE_LIMITED' | 'BLOCKED_OFFLINE' | 'ERROR' | string;
+    last_sync_message: string;
+    sol_keys: string[];
+    endpoint: string;
+  };
+  summary: {
+    sol_count: number;
+    latest_sol_id?: string | null;
+    landing_site: string;
+    data_archive_notice: string;
+    latest_pressure_pa?: number | null;
+    latest_pressure_kpa?: number | null;
+    latest_temp_av_c?: number | null;
+    latest_temp_min_c?: number | null;
+    latest_temp_max_c?: number | null;
+    diurnal_temp_swing_c?: number | null;
+    latest_wind_av_ms?: number | null;
+    latest_wind_compass?: string | null;
+    sols_with_missing_sensors: string[];
+  };
+  sols: InsightWeatherSol[];
+}
+
+export type IntegrationClassification =
+  | 'SUPPORTED_CONNECTION'
+  | 'IMPORT_SUPPORTED'
+  | 'GUIDED_EXAMINATION'
+  | 'SIMULATION_AVAILABLE'
+  | 'NOT_INTEGRATED';
+
+export type DeviceConnectionStatus =
+  | 'not_connected'
+  | 'connected'
+  | 'simulation'
+  | 'disconnected'
+  | 'error'
+  | 'unavailable';
+
+export type DeviceDataQuality =
+  | 'valid'
+  | 'warning'
+  | 'invalid_unit'
+  | 'out_of_range'
+  | 'incomplete';
+
+export interface DeviceResearchRef {
+  label: string;
+  url: string;
+  agency: string;
+}
+
+export interface DeviceCatalogEntry {
+  device_id: string;
+  code: string;
+  name: string;
+  category: 'wearables' | 'imaging' | 'dosimetry' | 'telemedicine' | 'biosamples' | 'behavioral_perf';
+  category_label: string;
+  illustration_type: string;
+  measures: string[];
+  how_it_works: string;
+  body_systems: string[];
+  research_references: DeviceResearchRef[];
+  supported_outputs: string[];
+  connection_methods: string[];
+  integration_classification: IntegrationClassification;
+  secondary_classifications?: IntegrationClassification[];
+  capabilities: {
+    supports_simulation: boolean;
+    supports_import: boolean;
+    supports_guided_exam: boolean;
+    supports_biosample: boolean;
+    is_countermeasure_only: boolean;
+    is_wellbeing_activity: boolean;
+  };
+  limitations_notice: string;
+}
+
+export interface DeviceConnectionState {
+  crew_id: string;
+  device_id: string;
+  connection_status: DeviceConnectionStatus;
+  active_mode: string;
+  last_error: string;
+  last_measurement_at: string;
+  updated_at: string;
+}
+
+export interface DeviceMeasurementRecord {
+  id?: number;
+  record_uid: string;
+  crew_id?: string;
+  astronaut_id: string;
+  device_id: string;
+  device_name: string;
+  measurement_category: string;
+  measurement_type: string;
+  value: number | null;
+  value_text?: string | null;
+  unit: string;
+  recorded_at: string;
+  connection_method: string;
+  data_source: string;
+  connection_status: DeviceConnectionStatus;
+  quality_status: DeviceDataQuality;
+  quality_note: string;
+  confirmed: boolean;
+  telemetry_field?: string | null;
+  metadata: Record<string, unknown>;
+  created_at?: string;
+}
+
+export interface HardwareAttachmentItem {
+  filename: string;
+  mime_type: string;
+  size_bytes: number;
+  summary: string;
+  content_preview: string;
+}
+
+export interface HardwareExamRecord {
+  id?: number;
+  exam_uid: string;
+  crew_id?: string;
+  device_id: string;
+  device_name: string;
+  exam_type: string;
+  mission_day: number;
+  recorded_at: string;
+  data_source: string;
+  findings: Record<string, unknown>;
+  summary_note: string;
+  abnormal_flag: boolean;
+  abnormal_reason: string;
+  attachments: HardwareAttachmentItem[];
+  created_at?: string;
+}
+
+export interface BiosampleRecord {
+  id?: number;
+  sample_uid: string;
+  crew_id?: string;
+  device_id: string;
+  device_name: string;
+  specimen_type: string;
+  collection_protocol: string;
+  mission_day: number;
+  collected_at: string;
+  storage_location: string;
+  status: string;
+  notes: string;
+  attachments: HardwareAttachmentItem[];
+  assay_results: {
+    filename?: string;
+    format?: string;
+    notes?: string;
+    markers?: Record<string, unknown>[];
+    provenance?: string;
+  };
+  assay_imported_at: string;
+  created_at?: string;
 }
 

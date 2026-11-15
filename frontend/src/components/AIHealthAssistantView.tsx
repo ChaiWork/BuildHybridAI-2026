@@ -161,13 +161,13 @@ export const AIHealthAssistantView: React.FC<AIHealthAssistantViewProps> = ({
 
   return (
     <div className="grid grid-cols-1 xl:grid-cols-[1.55fr_1fr] gap-6 items-start">
-      {/* Left: Conversational TARSCARE Companion */}
+      {/* Left: Conversational TARS Care Companion */}
       <div className="mc-card p-5 lg:p-6 flex flex-col gap-5">
         <div className="flex flex-wrap items-center justify-between gap-3 pb-4 border-b border-white/[0.08]">
           <div className="flex items-center gap-2.5">
             <Sparkles className="w-5 h-5 text-[#A5D8FF]" />
             <div>
-              <h1 className="text-xl font-bold text-[#FAF9FA]">TARSCARE Health Assistant</h1>
+              <h1 className="text-xl font-bold text-[#FAF9FA]">TARS Care Health Assistant</h1>
               <p className="text-xs text-[#E5E5E4]/75">
                 Offline-first companion backed by NASA HRP, OSDR, RadLab, NLSP, EDA &amp; CSA research
               </p>
@@ -264,7 +264,7 @@ export const AIHealthAssistantView: React.FC<AIHealthAssistantViewProps> = ({
                 }`}
             >
               <div className="text-xs font-semibold text-[#A5D8FF] mb-1.5">
-                {turn.role === 'user' ? 'You (Crew Member)' : 'TARSCARE Companion'}
+                {turn.role === 'user' ? 'You (Crew Member)' : 'TARS Care Companion'}
               </div>
               <div className="text-sm text-[#FAF9FA] whitespace-pre-line leading-relaxed">
                 {turn.text}
@@ -309,7 +309,7 @@ export const AIHealthAssistantView: React.FC<AIHealthAssistantViewProps> = ({
                       )}
                       {(turn.response.operational_procedures?.length || 0) > 0 && (
                         <div className="rounded-xl bg-[#121522] p-2.5 border border-[#A5D8FF]/20 space-y-1.5">
-                          <div className="font-semibold text-[#A5D8FF]">TARSCARE Operational Procedures</div>
+                          <div className="font-semibold text-[#A5D8FF]">TARS Care Operational Procedures</div>
                           <ul className="space-y-1.5 text-[#E5E5E4]/90">
                             {turn.response.operational_procedures!.map((op, i) => (
                               <li key={`${op.doc_id}-${i}`} className="leading-snug">
@@ -404,7 +404,7 @@ export const AIHealthAssistantView: React.FC<AIHealthAssistantViewProps> = ({
           <input
             id="ai-question-input"
             name="assistant_question"
-            aria-label="Ask TARSCARE medical knowledge assistant"
+            aria-label="Ask TARS Care medical knowledge assistant"
             type="text"
             value={question}
             onChange={(e) => setQuestion(e.target.value)}
@@ -436,7 +436,7 @@ export const AIHealthAssistantView: React.FC<AIHealthAssistantViewProps> = ({
         </div>
 
         <p className="text-xs text-[#E5E5E4]/80 leading-relaxed">
-          All guidance retrieves from these pre-bundled NASA, CSA &amp; TARSCARE references offline without cloud connectivity. Does not prescribe medications or override emergency procedures.
+          All guidance retrieves from these pre-bundled NASA, CSA &amp; TARS Care references offline without cloud connectivity. Does not prescribe medications or override emergency procedures.
         </p>
 
         <div className="space-y-2.5 max-h-[600px] overflow-y-auto pr-1">

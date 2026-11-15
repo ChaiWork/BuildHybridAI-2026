@@ -6,6 +6,7 @@ the 4-section Spaceflight Hazard modules, structured assessment explanation, and
 
 from __future__ import annotations
 from typing import Any, Dict, List
+from mission_ops import recommendation_sort_key
 
 
 def normalize_comm_mode(comm_state: Dict[str, Any]) -> Dict[str, Any]:
@@ -143,10 +144,9 @@ def build_marscare_extensions(
         changes.append("Minor day-to-day variation only; heart rate, oxygenation, and sleep remain steady.")
     what_changed_text = "; ".join(changes) + "."
 
-    prio_rank = {"IMMEDIATE": 0, "HIGH": 1, "DEFERRED": 2, "ROUTINE": 3}
     recs = sorted(
         list(base_assessment.get("recommendations", [])),
-        key=lambda r: prio_rank.get(str(r.get("priority", "ROUTINE")).upper(), 9),
+        key=recommendation_sort_key,
     )
     if recs:
         should_act = recs[0].get("action") or recs[0].get("guidance") or "Follow routine onboard hydration, sleep hygiene, and countermeasure schedule."
@@ -167,7 +167,17 @@ def build_marscare_extensions(
     head_status = hazard_statuses.get("Isolation and Confinement", "NORMAL")
     if int(latest.get("concentration_difficulty", 0)) == 1 or fatigue >= 6.0:
         head_status = "WARNING" if head_status == "NORMAL" else head_status
-    eyes_status = "WARNING" if latest.get("visual_disturbance_sans") else "NORMAL"
+    latest_sans = base_assessment.get("latest_sans")
+    sans_abnormal = bool(
+        latest_sans
+        and int(latest_sans.get("mission_day", 0)) >= int(latest.get("mission_day", 0))
+        and (
+            latest_sans.get("wavy_lines_detected")
+            or len(latest_sans.get("scotoma_cells") or []) > 0
+            or latest_sans.get("near_acuity_shift")
+        )
+    )
+    eyes_status = "WARNING" if (latest.get("visual_disturbance_sans") or sans_abnormal) else "NORMAL"
     heart_status = (
         "CRITICAL"
         if (
@@ -224,7 +234,7 @@ def build_marscare_extensions(
             "status": eyes_status,
             "summary": "Visual symptoms & Spaceflight Associated Neuro-ocular Syndrome (SANS)",
             "measurements": [
-                {"label": "Near-Vision / SANS Shift", "value": "Symptom Reported" if latest.get("visual_disturbance_sans") else "Clear", "unit": "Check", "baseline": "Clear", "recorded_at": ts_rec},
+                {"label": "Near-Vision / SANS Shift", "value": "Amsler Flag" if sans_abnormal else ("Symptom Reported" if latest.get("visual_disturbance_sans") else "Clear"), "unit": "Check", "baseline": "Clear", "recorded_at": ts_rec},
                 {"label": "Gravity Regime", "value": f"{grav_g}g", "unit": "Field", "baseline": "1.0g Earth", "recorded_at": ts_rec},
                 {"label": "Fluid-Shift Pressure Proxy", "value": f"{round(sys_bp)}/{round(dia_bp)}", "unit": "mmHg", "baseline": f"{round(sys_base)}/{round(dia_base)}", "recorded_at": ts_rec},
             ],
@@ -433,7 +443,7 @@ def build_marscare_extensions(
             immediate_items.append({
                 "action": r.get("action", ""),
                 "rationale": r.get("rationale", "Immediate deterministic safety action triggered by current telemetry."),
-                "source": r.get("citation", "TARSCARE Safety Engine"),
+                "source": r.get("citation", "TARS Care Safety Engine"),
             })
     if not immediate_items:
         for r in recs:
@@ -441,7 +451,7 @@ def build_marscare_extensions(
                 immediate_items.append({
                     "action": r.get("action", ""),
                     "rationale": r.get("rationale", "High-priority action for active hazard warning."),
-                    "source": r.get("citation", "TARSCARE Safety Engine"),
+                    "source": r.get("citation", "TARS Care Safety Engine"),
                 })
     if not immediate_items:
         immediate_items.append({
@@ -498,7 +508,7 @@ def build_marscare_extensions(
                 "source": "NASA Life Sciences Portal (NLSP)",
             },
             {
-                "action": "Ask the TARSCARE Health Assistant to cross-check symptoms against habitat ECLSS logs.",
+                "action": "Ask the TARS Care Health Assistant to cross-check symptoms against habitat ECLSS logs.",
                 "rationale": "Separates environmental CO2/humidity effects from physiological changes cleanly offline.",
                 "source": "NASA HRP / CSA C-STARS",
             },

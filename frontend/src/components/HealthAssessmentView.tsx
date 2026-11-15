@@ -1,23 +1,66 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   AlertTriangle,
   CheckCircle2,
   ChevronDown,
   ChevronUp,
   ClipboardCheck,
+  Eye,
+  Link2,
+  Link2Off,
+  Mic,
+  MicOff,
   ShieldAlert,
   Sparkles,
   Stethoscope,
+  Upload,
 } from 'lucide-react';
-import { FullSystemState, MissionPhase } from '../types';
-import { apiRequest, provenanceLabel, statusMeta } from './uiHelpers';
+import {
+  DeviceMeasurementRecord,
+  FullSystemState,
+  MissionPhase,
+} from '../types';
+import {
+  apiRequest,
+  deviceImportTemplate,
+  deviceStatusMeta,
+  provenanceLabel,
+  statusMeta,
+} from './uiHelpers';
+import {
+  isSpeechRecognitionSupported,
+  parseVoiceTriageCommand,
+  startVoiceCommandListener,
+} from './voiceHelpers';
 
 interface HealthAssessmentViewProps {
   state: FullSystemState;
   focusedRegionId?: string;
   onStateUpdated: (nextState: FullSystemState) => void;
   onOpenEmergency: (hazardName?: string) => void;
+  onOpenSansModal?: () => void;
+  onOpenDevices?: (opts?: { category?: string; deviceId?: string }) => void;
 }
+
+const QUICK_CONNECT_DEVICES = [
+  { id: 'CSA_BIO_MONITOR', label: 'Bio-Monitor Smart Shirt (HR, RR, SpO₂)' },
+  { id: 'BP_CUFF_CARDIOBREATH', label: 'Inflatable Blood Pressure Cuff' },
+  { id: 'TEMPUS_PRO', label: 'Tempus Pro Telemedicine (ECG, BP, SpO₂, Temp)' },
+  { id: 'ARCHER_ACTIGRAPHY', label: 'ARCHeR Actigraphy (Sleep & Activity)' },
+  { id: 'CANS_SPECTROMETER', label: 'CANS Neutron Spectrometer (mGy / mSv)' },
+  { id: 'POSTUROGRAPHY_BALANCE', label: 'Posturography Balance Platform' },
+];
+
+const GUIDED_EXAMS = [
+  { id: 'ULTRASOUND_VASCULAR', label: 'Ultrasound Examination', detail: 'Heart, vessels & report upload' },
+  { id: 'OCULAR_TONOMETER_SANS', label: 'Eye-Pressure & SANS', detail: 'IOP mmHg + visual check' },
+  { id: 'POSTUROGRAPHY_BALANCE', label: 'Balance Assessment', detail: 'Sensorimotor stability score' },
+  { id: 'CYCLE_ERGOMETER_ASTROFIT', label: 'Exercise Performance Test', detail: 'AstroFit / ergometer watts' },
+  { id: 'THIGH_CUFFS_COUNTERMEASURE', label: 'Thigh Cuffs Log', detail: 'Fluid countermeasure duration' },
+  { id: 'SALIVA_BLOTTING_BOOKLET', label: 'Saliva & Biosample Kits', detail: 'Log specimens & lab assays' },
+  { id: 'MRI_NEURO_OCULAR', label: 'MRI Neuro-Ocular Record', detail: 'Specialized clinical imaging' },
+  { id: 'TBONE_3D_SCANNER', label: 'TBone 3D Bone Scanner', detail: 'HR-pQCT skeletal density' },
+];
 
 const SYMPTOM_CATEGORIES = [
   {
@@ -121,8 +164,21 @@ export const HealthAssessmentView: React.FC<HealthAssessmentViewProps> = ({
   focusedRegionId,
   onStateUpdated,
   onOpenEmergency,
+  onOpenSansModal,
+  onOpenDevices,
 }) => {
   const { latest_telemetry: latest, assessment } = state;
+
+  // Three Entry Methods Hub State (Method A: Device, Method B: Guided Exam, Method C: Manual / Import)
+  const [entryMethod, setEntryMethod] = useState<'device' | 'exam' | 'import'>('device');
+  const [selectedDeviceId, setSelectedDeviceId] = useState<string>('CSA_BIO_MONITOR');
+  const [deviceBusy, setDeviceBusy] = useState(false);
+  const [deviceNotice, setDeviceNotice] = useState<{ tone: 'info' | 'warning' | 'error' | 'success'; text: string } | null>(null);
+  const [stagedDeviceReadings, setStagedDeviceReadings] = useState<DeviceMeasurementRecord[]>([]);
+  const [confirmedUids, setConfirmedUids] = useState<Record<string, boolean>>({});
+  const [inlineImportFmt, setInlineImportFmt] = useState<'csv' | 'json'>('csv');
+  const [inlineImportRaw, setInlineImportRaw] = useState<string>(() => deviceImportTemplate('CSA_BIO_MONITOR'));
+  const [inlineImportErrors, setInlineImportErrors] = useState<string[]>([]);
 
   const initial = buildFormFromTelemetry(latest);
   const [form, setForm] = useState(initial.form);
@@ -132,6 +188,15 @@ export const HealthAssessmentView: React.FC<HealthAssessmentViewProps> = ({
   const [feedbackMsg, setFeedbackMsg] = useState<string | null>(null);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [lastSubmittedSymptoms, setLastSubmittedSymptoms] = useState<string[] | null>(null);
+  const [voiceCaptureActive, setVoiceCaptureActive] = useState(false);
+  const [voiceCaptureMsg, setVoiceCaptureMsg] = useState<string | null>(null);
+  const voiceCaptureStopRef = useRef<(() => void) | null>(null);
+
+  useEffect(() => {
+    return () => {
+      voiceCaptureStopRef.current?.();
+    };
+  }, []);
 
   // Daily Psychological & Sleep Check-in State
   const [psychOpen, setPsychOpen] = useState(false);
@@ -165,9 +230,210 @@ export const HealthAssessmentView: React.FC<HealthAssessmentViewProps> = ({
     });
   };
 
+  const applySpokenSymptomTranscript = (transcript: string) => {
+    const parsed = parseVoiceTriageCommand(transcript);
+    const lower = transcript.toLowerCase();
+    let matchedSymptom = parsed?.action === 'ADD_SYMPTOM' ? parsed.symptom : undefined;
+    if (!matchedSymptom) {
+      if (lower.includes('headache')) matchedSymptom = 'Headache';
+      else if (lower.includes('cough')) matchedSymptom = 'Mild dry cough';
+      else if (lower.includes('visual') || lower.includes('vision') || lower.includes('eye')) matchedSymptom = 'Visual disturbances';
+      else if (lower.includes('fatigue') || lower.includes('tired')) matchedSymptom = 'Severe fatigue';
+    }
+    if (matchedSymptom) {
+      setSelectedSymptoms((prev) => {
+        const cleaned = prev.filter((s) => !s.startsWith('None'));
+        return cleaned.includes(matchedSymptom!) ? cleaned : [...cleaned, matchedSymptom!];
+      });
+      setVoiceCaptureMsg(`Voice captured symptom: ${matchedSymptom}`);
+    } else {
+      setVoiceCaptureMsg(`Heard "${transcript}" — say e.g. "chest pain", "shortness of breath", "dizzy", or "headache".`);
+    }
+  };
+
+  const handleToggleVoiceSymptomCapture = () => {
+    if (voiceCaptureActive) {
+      voiceCaptureStopRef.current?.();
+      voiceCaptureStopRef.current = null;
+      setVoiceCaptureActive(false);
+      return;
+    }
+    if (!isSpeechRecognitionSupported()) {
+      setVoiceCaptureMsg('Browser SpeechRecognition unavailable — tap a symptom pill below or use quick tactile capture.');
+      return;
+    }
+    setVoiceCaptureActive(true);
+    setVoiceCaptureMsg('Listening for symptom phrase ("chest pain", "shortness of breath", "dizzy")...');
+    voiceCaptureStopRef.current = startVoiceCommandListener({
+      onResult: (transcript) => applySpokenSymptomTranscript(transcript),
+      onError: (msg) => {
+        setVoiceCaptureMsg(msg);
+        setVoiceCaptureActive(false);
+      },
+      onEnd: () => {
+        setVoiceCaptureActive(false);
+        voiceCaptureStopRef.current = null;
+      },
+    });
+  };
+
   const applyPhasePreset = (phase: MissionPhase) => {
     const g = phase === 'MICROGRAVITY_TRANSIT' ? 0.0 : phase === 'EARTH_RETURN' ? 1.0 : 0.38;
     setForm((prev) => ({ ...prev, mission_phase: phase, gravity_g: g }));
+  };
+
+  const handleQuickDeviceConnect = async (mode: 'hardware' | 'simulation') => {
+    setDeviceBusy(true);
+    setDeviceNotice(null);
+    try {
+      const res = await apiRequest<{ connection_status: string; message: string }>(
+        `/api/devices/${selectedDeviceId}/connect`,
+        {
+          method: 'POST',
+          body: JSON.stringify({ mode }),
+        },
+      );
+      if (mode === 'simulation') {
+        const col = await apiRequest<{ staged_readings: DeviceMeasurementRecord[] }>(
+          `/api/devices/${selectedDeviceId}/collect`,
+          { method: 'POST' },
+        );
+        const rows = col.staged_readings || [];
+        setStagedDeviceReadings(rows);
+        const sel: Record<string, boolean> = {};
+        rows.forEach((r) => {
+          if (r.quality_status === 'valid') sel[r.record_uid] = true;
+        });
+        setConfirmedUids(sel);
+        setDeviceNotice({
+          tone: 'warning',
+          text: `${res.message} Collected ${rows.length} staged readings below for confirmation.`,
+        });
+      } else {
+        setDeviceNotice({ tone: 'error', text: res.message });
+      }
+      const fresh = await apiRequest<FullSystemState>('/api/state');
+      onStateUpdated(fresh);
+    } catch (err) {
+      setDeviceNotice({
+        tone: 'error',
+        text: err instanceof Error ? err.message : 'Device connection failed.',
+      });
+    } finally {
+      setDeviceBusy(false);
+    }
+  };
+
+  const handleQuickDeviceDisconnect = async () => {
+    setDeviceBusy(true);
+    try {
+      await apiRequest(`/api/devices/${selectedDeviceId}/disconnect`, { method: 'POST' });
+      setStagedDeviceReadings([]);
+      const fresh = await apiRequest<FullSystemState>('/api/state');
+      onStateUpdated(fresh);
+      setDeviceNotice({ tone: 'info', text: 'Device disconnected.' });
+    } finally {
+      setDeviceBusy(false);
+    }
+  };
+
+  const handleInlineImportParse = async () => {
+    setDeviceBusy(true);
+    setInlineImportErrors([]);
+    setDeviceNotice(null);
+    try {
+      const res = await apiRequest<{
+        parsed_readings: DeviceMeasurementRecord[];
+        validation_errors: string[];
+        valid_count: number;
+        invalid_count: number;
+      }>(`/api/devices/${selectedDeviceId}/parse-import`, {
+        method: 'POST',
+        body: JSON.stringify({
+          format: inlineImportFmt,
+          filename: `${selectedDeviceId.toLowerCase()}_inline.${inlineImportFmt}`,
+          raw_text: inlineImportRaw,
+        }),
+      });
+      const rows = res.parsed_readings || [];
+      setStagedDeviceReadings(rows);
+      setInlineImportErrors(res.validation_errors || []);
+      const sel: Record<string, boolean> = {};
+      rows.forEach((r) => {
+        if (r.quality_status === 'valid') sel[r.record_uid] = true;
+      });
+      setConfirmedUids(sel);
+      setDeviceNotice({
+        tone: res.invalid_count > 0 ? 'error' : 'info',
+        text:
+          res.invalid_count > 0
+            ? `Parsed ${res.valid_count} valid and ${res.invalid_count} invalid rows. Review errors before confirming.`
+            : `Validated ${res.valid_count} imported measurement(s). Review and confirm below.`,
+      });
+    } catch (err) {
+      setDeviceNotice({
+        tone: 'error',
+        text: err instanceof Error ? err.message : 'Unable to parse imported telemetry.',
+      });
+    } finally {
+      setDeviceBusy(false);
+    }
+  };
+
+  const handlePopulateManualFieldsFromStaged = () => {
+    const selected = stagedDeviceReadings.filter((r) => confirmedUids[r.record_uid]);
+    if (selected.length === 0) return;
+    setForm((prev) => {
+      const next = { ...prev } as Record<string, any>;
+      selected.forEach((r) => {
+        if (r.telemetry_field && typeof r.value === 'number' && r.telemetry_field in next) {
+          next[r.telemetry_field] = r.value;
+        }
+      });
+      return next as typeof prev;
+    });
+    setFeedbackMsg(
+      `Populated ${selected.length} confirmed device reading(s) into Method 1 manual assessment inputs below.`,
+    );
+  };
+
+  const handleConfirmAndEvaluateFromAssessment = async () => {
+    const selected = stagedDeviceReadings
+      .filter((r) => confirmedUids[r.record_uid])
+      .map((r) => ({ ...r, confirmed: true }));
+    if (selected.length === 0) {
+      setDeviceNotice({ tone: 'error', text: 'Select at least one valid reading to confirm.' });
+      return;
+    }
+    setDeviceBusy(true);
+    try {
+      const res = await apiRequest<{ state: FullSystemState }>(
+        `/api/devices/${selectedDeviceId}/confirm`,
+        {
+          method: 'POST',
+          body: JSON.stringify({
+            measurements: selected,
+            evaluate_health_assessment: true,
+            notes: 'Confirmed inside Health Assessment workflow',
+          }),
+        },
+      );
+      onStateUpdated(res.state);
+      const nextForm = buildFormFromTelemetry(res.state.latest_telemetry);
+      setForm(nextForm.form);
+      setStagedDeviceReadings([]);
+      setConfirmedUids({});
+      setFeedbackMsg(
+        `Saved ${selected.length} confirmed device reading(s) & evaluated health assessment (${res.state.assessment.overall_status}).`,
+      );
+    } catch (err) {
+      setDeviceNotice({
+        tone: 'error',
+        text: err instanceof Error ? err.message : 'Confirmation failed.',
+      });
+    } finally {
+      setDeviceBusy(false);
+    }
   };
 
   const loadScenario = async (scenarioId: string) => {
@@ -332,6 +598,306 @@ export const HealthAssessmentView: React.FC<HealthAssessmentViewProps> = ({
         </div>
       )}
 
+      {/* Three Entry Methods Hub: Method A (Device) | Method B (Guided Exam) | Method C (Import / Manual) */}
+      <section className="mc-card p-5 lg:p-6 space-y-4">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h2 className="text-lg font-semibold text-[#FAF9FA]">
+              Health Data Collection Methods
+            </h2>
+            <p className="text-xs text-[#E5E5E4]/75 mt-0.5">
+              Connect compatible medical instruments, start guided examinations, import CSV/JSON exports, or use manual entry below.
+            </p>
+          </div>
+          {onOpenDevices && (
+            <button
+              type="button"
+              onClick={() => onOpenDevices({ category: 'all' })}
+              className="px-3 py-1.5 rounded-lg text-xs font-medium bg-[#181C2E] border border-[#A5D8FF]/30 text-[#A5D8FF] hover:border-[#A5D8FF]"
+            >
+              Open Full 20-Device Catalogue →
+            </button>
+          )}
+        </div>
+
+        <div className="flex flex-wrap gap-2" role="tablist" aria-label="Health data collection methods">
+          {[
+            { id: 'device' as const, label: 'Method A · Connect Medical Device' },
+            { id: 'exam' as const, label: 'Method B · Start Medical Examination' },
+            { id: 'import' as const, label: 'Method C · Import CSV/JSON & Manual Entry' },
+          ].map((tab) => (
+            <button
+              key={tab.id}
+              type="button"
+              role="tab"
+              aria-selected={entryMethod === tab.id}
+              onClick={() => setEntryMethod(tab.id)}
+              className={`px-3.5 py-2 rounded-lg text-xs font-semibold transition ${
+                entryMethod === tab.id
+                  ? 'bg-[#EEF0F6] text-[#040404]'
+                  : 'bg-[#0B0D1A] text-[#E5E5E4] border border-white/15 hover:border-white/30'
+              }`}
+            >
+              {tab.label}
+            </button>
+          ))}
+        </div>
+
+        {/* METHOD A: CONNECT DEVICE */}
+        {entryMethod === 'device' && (
+          <div className="rounded-xl bg-[#0B0D1A] border border-white/10 p-4 space-y-4">
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-3 items-end">
+              <div className="md:col-span-2">
+                <label htmlFor="quick-device-select" className="block text-xs text-[#E5E5E4]/80 mb-1">
+                  Select Compatible Medical Instrument
+                </label>
+                <select
+                  id="quick-device-select"
+                  name="quick_device_select"
+                  value={selectedDeviceId}
+                  onChange={(e) => {
+                    const id = e.target.value;
+                    setSelectedDeviceId(id);
+                    setInlineImportRaw(deviceImportTemplate(id));
+                    setStagedDeviceReadings([]);
+                    setDeviceNotice(null);
+                  }}
+                  className="w-full px-3 py-2 rounded-lg bg-[#121522] border border-white/15 text-xs text-[#FAF9FA]"
+                >
+                  {QUICK_CONNECT_DEVICES.map((d) => (
+                    <option key={d.id} value={d.id}>
+                      {d.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div className="flex items-center justify-between md:justify-end gap-2">
+                <span className="text-xs text-[#E5E5E4]/65">Status:</span>
+                <span
+                  className={`px-2.5 py-1 rounded-full text-xs font-medium ${
+                    deviceStatusMeta(state.device_states?.[selectedDeviceId]?.connection_status).badgeClass
+                  }`}
+                >
+                  {deviceStatusMeta(state.device_states?.[selectedDeviceId]?.connection_status).label}
+                </span>
+              </div>
+            </div>
+
+            <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                disabled={deviceBusy}
+                onClick={() => handleQuickDeviceConnect('hardware')}
+                className="px-3.5 py-2 rounded-lg text-xs font-medium bg-[#181C2E] border border-white/20 text-[#FAF9FA] inline-flex items-center gap-1.5"
+              >
+                <Link2 className="w-3.5 h-3.5" aria-hidden="true" />
+                Connect Device
+              </button>
+              <button
+                type="button"
+                disabled={deviceBusy}
+                onClick={() => handleQuickDeviceConnect('simulation')}
+                className="px-3.5 py-2 rounded-lg text-xs font-medium bg-amber-500/15 border border-amber-500/35 text-amber-200 inline-flex items-center gap-1.5"
+              >
+                <Sparkles className="w-3.5 h-3.5" aria-hidden="true" />
+                Collect Simulation Readings
+              </button>
+              <button
+                type="button"
+                disabled={deviceBusy}
+                onClick={handleQuickDeviceDisconnect}
+                className="px-3 py-2 rounded-lg text-xs bg-[#181C2E] border border-white/15 text-[#E5E5E4] inline-flex items-center gap-1.5"
+              >
+                <Link2Off className="w-3.5 h-3.5" aria-hidden="true" />
+                Disconnect
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* METHOD B: START MEDICAL EXAMINATION */}
+        {entryMethod === 'exam' && (
+          <div className="rounded-xl bg-[#0B0D1A] border border-white/10 p-4 space-y-3">
+            <div className="text-xs text-[#E5E5E4]/85">
+              Diagnostic imaging, eye-pressure tonometry, balance testing, and biosample kits require guided clinical workflows rather than automatic vital streaming.
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5">
+              {GUIDED_EXAMS.map((ex) => (
+                <button
+                  key={ex.id}
+                  type="button"
+                  onClick={() => onOpenDevices?.({ deviceId: ex.id })}
+                  className="text-left p-3 rounded-xl bg-[#121522] border border-white/15 hover:border-[#A5D8FF]/45 transition space-y-1"
+                >
+                  <div className="text-xs font-semibold text-[#FAF9FA]">{ex.label}</div>
+                  <div className="text-[11px] text-[#E5E5E4]/75">{ex.detail}</div>
+                </button>
+              ))}
+            </div>
+            {onOpenSansModal && (
+              <button
+                type="button"
+                onClick={onOpenSansModal}
+                className="px-3 py-1.5 rounded-lg text-xs font-medium bg-[#181C2E] border border-[#A5D8FF]/30 text-[#A5D8FF] inline-flex items-center gap-1.5"
+              >
+                <Eye className="w-3.5 h-3.5" aria-hidden="true" />
+                Open Interactive SANS Amsler Vision Check
+              </button>
+            )}
+          </div>
+        )}
+
+        {/* METHOD C: IMPORT CSV/JSON TELEMETRY */}
+        {entryMethod === 'import' && (
+          <div className="rounded-xl bg-[#0B0D1A] border border-white/10 p-4 space-y-3 text-xs">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div>
+                <label htmlFor="inline-import-device" className="block text-[#E5E5E4]/80 mb-1">
+                  Source Instrument Schema
+                </label>
+                <select
+                  id="inline-import-device"
+                  name="inline_import_device"
+                  value={selectedDeviceId}
+                  onChange={(e) => {
+                    const id = e.target.value;
+                    setSelectedDeviceId(id);
+                    setInlineImportRaw(deviceImportTemplate(id));
+                  }}
+                  className="w-full px-3 py-2 rounded-lg bg-[#121522] border border-white/15 text-[#FAF9FA]"
+                >
+                  {QUICK_CONNECT_DEVICES.map((d) => (
+                    <option key={d.id} value={d.id}>
+                      {d.label}
+                    </option>
+                  ))}
+                  <option value="EVARM_MOSFET">EVARM MOSFET Dosimeter (mGy)</option>
+                  <option value="CYCLE_ERGOMETER_ASTROFIT">Cycle Ergometer / AstroFit</option>
+                </select>
+              </div>
+              <div>
+                <label htmlFor="inline-import-format" className="block text-[#E5E5E4]/80 mb-1">
+                  Telemetry Export Format
+                </label>
+                <select
+                  id="inline-import-format"
+                  name="inline_import_format"
+                  value={inlineImportFmt}
+                  onChange={(e) => setInlineImportFmt(e.target.value as 'csv' | 'json')}
+                  className="w-full px-3 py-2 rounded-lg bg-[#121522] border border-white/15 text-[#FAF9FA]"
+                >
+                  <option value="csv">CSV Telemetry</option>
+                  <option value="json">JSON Telemetry</option>
+                </select>
+              </div>
+            </div>
+            <div>
+              <label htmlFor="inline-import-raw" className="block text-[#E5E5E4]/80 mb-1">
+                Paste CSV/JSON Export (manual entry inputs below also remain active at all times)
+              </label>
+              <textarea
+                id="inline-import-raw"
+                name="inline_import_raw"
+                rows={4}
+                value={inlineImportRaw}
+                onChange={(e) => setInlineImportRaw(e.target.value)}
+                className="w-full px-3 py-2 rounded-lg bg-[#121522] border border-white/15 font-mono text-[#FAF9FA]"
+              />
+            </div>
+            {inlineImportErrors.length > 0 && (
+              <div className="rounded-lg bg-red-500/15 border border-red-500/35 p-2.5 text-red-200 space-y-1">
+                {inlineImportErrors.map((err, i) => (
+                  <div key={i}>• {err}</div>
+                ))}
+              </div>
+            )}
+            <button
+              type="button"
+              disabled={deviceBusy}
+              onClick={handleInlineImportParse}
+              className="px-4 py-2 rounded-lg text-xs font-semibold bg-[#EEF0F6] text-[#040404] inline-flex items-center gap-1.5"
+            >
+              <Upload className="w-3.5 h-3.5" aria-hidden="true" />
+              Validate &amp; Stage Imported Readings
+            </button>
+          </div>
+        )}
+
+        {/* Device Feedback & Staged Review/Populate Bar */}
+        {deviceNotice && (
+          <div
+            className={`rounded-lg px-4 py-2.5 text-xs border ${
+              deviceNotice.tone === 'error'
+                ? 'bg-red-500/15 border-red-500/35 text-red-200'
+                : deviceNotice.tone === 'warning'
+                  ? 'bg-amber-500/15 border-amber-500/35 text-amber-200'
+                  : 'bg-[#181C2E] border-white/15 text-[#FAF9FA]'
+            }`}
+          >
+            {deviceNotice.text}
+          </div>
+        )}
+
+        {stagedDeviceReadings.length > 0 && (
+          <div className="rounded-xl bg-[#181C2E] border border-[#A5D8FF]/30 p-4 space-y-3 text-xs">
+            <div className="font-semibold text-[#FAF9FA]">
+              Staged Hardware / Import Readings ({stagedDeviceReadings.length}) — Review &amp; Confirm
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
+              {stagedDeviceReadings.map((r) => (
+                <label
+                  key={r.record_uid}
+                  htmlFor={`ha-confirm-${r.record_uid}`}
+                  className="flex items-center justify-between gap-2 p-2.5 rounded-lg bg-[#0B0D1A] border border-white/10"
+                >
+                  <span className="flex items-center gap-2">
+                    <input
+                      id={`ha-confirm-${r.record_uid}`}
+                      name={`ha_confirm_${r.record_uid}`}
+                      type="checkbox"
+                      disabled={r.quality_status !== 'valid'}
+                      checked={Boolean(confirmedUids[r.record_uid])}
+                      onChange={(e) =>
+                        setConfirmedUids((prev) => ({
+                          ...prev,
+                          [r.record_uid]: e.target.checked,
+                        }))
+                      }
+                    />
+                    <span className="text-[#FAF9FA]">
+                      {r.measurement_type.replace(/_/g, ' ')}:{' '}
+                      <strong className="text-[#A5D8FF]">
+                        {r.value ?? r.value_text} {r.unit}
+                      </strong>
+                    </span>
+                  </span>
+                  <span className={r.quality_status === 'valid' ? 'text-emerald-300' : 'text-red-300'}>
+                    {r.data_source === 'simulated' ? 'SIM' : r.quality_status}
+                  </span>
+                </label>
+              ))}
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={handlePopulateManualFieldsFromStaged}
+                className="px-3.5 py-1.5 rounded-lg font-medium bg-[#0B0D1A] border border-white/20 text-[#FAF9FA]"
+              >
+                Populate Method 1 Form Inputs
+              </button>
+              <button
+                type="button"
+                disabled={deviceBusy}
+                onClick={handleConfirmAndEvaluateFromAssessment}
+                className="px-4 py-1.5 rounded-lg font-semibold bg-[#EEF0F6] text-[#040404]"
+              >
+                Confirm, Save &amp; Run Assessment Engine
+              </button>
+            </div>
+          </div>
+        )}
+      </section>
+
       {/* Dual-Method Assessment Form: Method 1 (Measurements) + Method 2 (Symptoms) */}
       <form onSubmit={submitAssessment} className="grid grid-cols-1 xl:grid-cols-2 gap-6">
         {/* Method 1: Manual Measurement Input */}
@@ -354,8 +920,8 @@ export const HealthAssessmentView: React.FC<HealthAssessmentViewProps> = ({
                   type="button"
                   onClick={() => applyPhasePreset(g.p)}
                   className={`px-2.5 py-1 rounded-full text-xs font-medium ${form.mission_phase === g.p
-                      ? 'bg-[#EEF0F6] text-[#040404]'
-                      : 'text-[#E5E5E4]/80 hover:text-[#FAF9FA]'
+                    ? 'bg-[#EEF0F6] text-[#040404]'
+                    : 'text-[#E5E5E4]/80 hover:text-[#FAF9FA]'
                     }`}
                 >
                   {g.label}
@@ -484,12 +1050,30 @@ export const HealthAssessmentView: React.FC<HealthAssessmentViewProps> = ({
         {/* Method 2: Categorized Symptom Selector + Submit */}
         <div className="mc-card p-5 lg:p-6 flex flex-col justify-between gap-5">
           <div className="space-y-4">
-            <div>
-              <h2 className="text-lg font-semibold text-[#FAF9FA]">Method 2: Selectable Symptoms</h2>
-              <p className="text-xs text-[#E5E5E4]/75 mt-0.5">
-                Organised by body system — choose any symptoms you are experiencing now.
-              </p>
+            <div className="flex flex-wrap items-start justify-between gap-2">
+              <div>
+                <h2 className="text-lg font-semibold text-[#FAF9FA]">Method 2: Selectable Symptoms</h2>
+                <p className="text-xs text-[#E5E5E4]/75 mt-0.5">
+                  Organised by body system — choose any symptoms you are experiencing now.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={handleToggleVoiceSymptomCapture}
+                className={`px-3 py-1.5 rounded-full text-xs font-semibold inline-flex items-center gap-1.5 border ${voiceCaptureActive
+                  ? 'bg-emerald-500/20 text-emerald-200 border-emerald-400/60'
+                  : 'bg-[#0B0D1A] text-[#A5D8FF] border-[#A5D8FF]/35 hover:border-[#A5D8FF]'
+                  }`}
+              >
+                {voiceCaptureActive ? <MicOff className="w-3.5 h-3.5" /> : <Mic className="w-3.5 h-3.5" />}
+                <span>{voiceCaptureActive ? 'Stop Voice Mic' : 'Voice Symptom Capture'}</span>
+              </button>
             </div>
+            {voiceCaptureMsg && (
+              <div className="rounded-xl bg-[#0B0D1A] border border-[#A5D8FF]/25 px-3 py-2 text-xs text-[#A5D8FF]">
+                {voiceCaptureMsg}
+              </div>
+            )}
 
             <div className="space-y-3.5">
               {SYMPTOM_CATEGORIES.map((grp) => (
@@ -504,8 +1088,8 @@ export const HealthAssessmentView: React.FC<HealthAssessmentViewProps> = ({
                           type="button"
                           onClick={() => toggleSymptom(item)}
                           className={`px-3 py-1.5 rounded-full text-xs font-medium transition-colors ${active
-                              ? 'bg-[#A5D8FF]/20 text-[#FAF9FA] border border-[#A5D8FF]'
-                              : 'bg-[#121522] text-[#E5E5E4]/85 border border-white/10 hover:text-[#FAF9FA]'
+                            ? 'bg-[#A5D8FF]/20 text-[#FAF9FA] border border-[#A5D8FF]'
+                            : 'bg-[#121522] text-[#E5E5E4]/85 border border-white/10 hover:text-[#FAF9FA]'
                             }`}
                         >
                           {item}
@@ -518,14 +1102,26 @@ export const HealthAssessmentView: React.FC<HealthAssessmentViewProps> = ({
             </div>
           </div>
 
-          <div className="flex flex-wrap items-center justify-between gap-3 pt-2 border-t border-white/[0.08]">
-            <button
-              type="button"
-              onClick={() => setPsychOpen((v) => !v)}
-              className="mc-btn-secondary px-4 py-2.5 text-xs"
-            >
-              {psychOpen ? 'Hide Behavioral Check-In' : 'Open Behavioral & Sleep Check-In'}
-            </button>
+          <div className="flex flex-wrap items-center justify-between gap-2.5 pt-2 border-t border-white/[0.08]">
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setPsychOpen((v) => !v)}
+                className="mc-btn-secondary px-4 py-2.5 text-xs"
+              >
+                {psychOpen ? 'Hide Behavioral Check-In' : 'Open Behavioral & Sleep Check-In'}
+              </button>
+              {onOpenSansModal && (
+                <button
+                  type="button"
+                  onClick={onOpenSansModal}
+                  className="mc-btn-secondary px-3.5 py-2.5 text-xs inline-flex items-center gap-1.5"
+                >
+                  <Eye className="w-3.5 h-3.5 text-[#A5D8FF]" />
+                  <span>SANS Amsler Check</span>
+                </button>
+              )}
+            </div>
             <button
               type="submit"
               disabled={submitting}

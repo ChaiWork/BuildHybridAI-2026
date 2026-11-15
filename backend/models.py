@@ -1,5 +1,5 @@
 """
-Pydantic models and data schemas for TARSCARE AI.
+Pydantic models and data schemas for TARS Care AI.
 Enforces strict unit preservation (Gy vs. Sv, mmHg, kPa, ppm, °C),
 explicit data provenance tags, configurable thresholds, and non-diagnostic safety metadata.
 """
@@ -225,4 +225,168 @@ class RAGQueryInput(BaseModel):
     hazard_filter: Optional[str] = None
     include_astronaut_context: bool = True
     history: List[RAGChatMessage] = Field(default_factory=list)
+
+
+class SansAssessmentInput(BaseModel):
+    mission_day: int = Field(default=184, ge=1, le=2000)
+    eye_tested: str = Field(default="BOTH", pattern="^(LEFT|RIGHT|BOTH)$")
+    wavy_lines_detected: bool = False
+    scotoma_cells: List[str] = Field(default_factory=list)
+    near_acuity_shift: bool = False
+    notes: str = Field(default="", max_length=400)
+    provenance: DataProvenance = DataProvenance.USER_ENTERED
+
+
+class MedKitAdjustInput(BaseModel):
+    item_code: str = Field(min_length=2, max_length=40)
+    quantity_delta: Optional[int] = Field(default=None, ge=-20, le=20)
+    set_quantity: Optional[int] = Field(default=None, ge=0, le=500)
+    notes: Optional[str] = Field(default=None, max_length=240)
+    mark_inspected: bool = False
+
+
+class FlightSurgeonConsultInput(BaseModel):
+    cmo_notes: str = Field(default="", max_length=1000)
+    urgency: RiskLevel = RiskLevel.WARNING
+    include_sans: bool = True
+
+
+class CrewSelectInput(BaseModel):
+    crew_id: str = Field(min_length=3, max_length=40)
+
+
+class CrewPinVerifyInput(BaseModel):
+    crew_id: str = Field(min_length=3, max_length=40)
+    pin: str = Field(min_length=4, max_length=16)
+
+
+class CrewPinUpdateInput(BaseModel):
+    crew_id: str = Field(min_length=3, max_length=40)
+    current_pin: str = Field(min_length=4, max_length=16)
+    new_pin: str = Field(min_length=4, max_length=16)
+
+
+class IntegrationClassification(str, Enum):
+    SUPPORTED_CONNECTION = "SUPPORTED_CONNECTION"
+    IMPORT_SUPPORTED = "IMPORT_SUPPORTED"
+    GUIDED_EXAMINATION = "GUIDED_EXAMINATION"
+    SIMULATION_AVAILABLE = "SIMULATION_AVAILABLE"
+    NOT_INTEGRATED = "NOT_INTEGRATED"
+
+
+class DeviceConnectionStatus(str, Enum):
+    NOT_CONNECTED = "not_connected"
+    CONNECTED = "connected"
+    SIMULATION = "simulation"
+    DISCONNECTED = "disconnected"
+    ERROR = "error"
+    UNAVAILABLE = "unavailable"
+
+
+class DeviceDataQuality(str, Enum):
+    VALID = "valid"
+    WARNING = "warning"
+    INVALID_UNIT = "invalid_unit"
+    OUT_OF_RANGE = "out_of_range"
+    INCOMPLETE = "incomplete"
+
+
+class DeviceConnectRequest(BaseModel):
+    mode: str = Field(default="simulation", pattern="^(hardware|simulation)$")
+    interface_hint: Optional[str] = Field(default=None, max_length=120)
+
+
+class DeviceMeasurementReading(BaseModel):
+    record_uid: Optional[str] = None
+    astronaut_id: str = "ARES-IV-SUCHAI"
+    device_id: str
+    device_name: str
+    measurement_category: str
+    measurement_type: str
+    value: Optional[float] = None
+    value_text: Optional[str] = None
+    unit: str
+    recorded_at: str
+    connection_method: str
+    data_source: str = Field(
+        default="simulated",
+        description="simulated | imported_file | guided_examination | documented_adapter",
+    )
+    connection_status: DeviceConnectionStatus = DeviceConnectionStatus.SIMULATION
+    quality_status: DeviceDataQuality = DeviceDataQuality.VALID
+    quality_note: str = ""
+    confirmed: bool = False
+    telemetry_field: Optional[str] = None
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+
+
+class TelemetryImportParseInput(BaseModel):
+    format: str = Field(default="csv", pattern="^(csv|json)$")
+    filename: str = Field(default="device_export.csv", max_length=160)
+    raw_text: str = Field(min_length=2, max_length=250000)
+
+
+class DeviceConfirmInput(BaseModel):
+    measurements: List[DeviceMeasurementReading] = Field(default_factory=list, min_length=1, max_length=100)
+    evaluate_health_assessment: bool = True
+    notes: str = Field(default="", max_length=500)
+
+
+class HardwareAttachmentItem(BaseModel):
+    filename: str = Field(min_length=1, max_length=160)
+    mime_type: str = Field(default="text/plain", max_length=80)
+    size_bytes: int = Field(default=0, ge=0, le=2_500_000)
+    summary: str = Field(default="", max_length=300)
+    content_preview: str = Field(default="", max_length=120000)
+
+
+class HardwareExamInput(BaseModel):
+    mission_day: int = Field(default=184, ge=1, le=2000)
+    summary: str = Field(default="", max_length=600)
+    findings: Dict[str, Any] = Field(default_factory=dict)
+    attachments: List[HardwareAttachmentItem] = Field(default_factory=list, max_length=5)
+    data_source: str = Field(default="guided_examination", max_length=40)
+    confirmed: bool = True
+    update_telemetry: bool = False
+
+
+class BiosampleCreateInput(BaseModel):
+    sample_type: str = Field(min_length=2, max_length=80)
+    mission_day: int = Field(default=184, ge=1, le=2000)
+    collected_at: Optional[str] = None
+    storage_location: str = Field(default="Cold Stowage MELFI-B · Tray 2", max_length=120)
+    notes: str = Field(default="", max_length=500)
+    provenance: DataProvenance = DataProvenance.USER_ENTERED
+
+
+class BiosampleAssayImportInput(BaseModel):
+    raw_text: str = Field(min_length=2, max_length=150000)
+    format: str = Field(default="json", pattern="^(csv|json)$")
+    filename: str = Field(default="assay_results.json", max_length=160)
+    notes: str = Field(default="", max_length=400)
+
+
+class DonkiSyncRequest(BaseModel):
+    start_date: Optional[str] = Field(default=None, max_length=20)
+    end_date: Optional[str] = Field(default=None, max_length=20)
+    services: Optional[List[str]] = None
+    most_accurate_only: bool = True
+    cme_speed: int = Field(default=500, ge=0, le=5000)
+    cme_half_angle: int = Field(default=30, ge=0, le=180)
+    catalog: str = Field(default="ALL", max_length=40)
+    ips_location: str = Field(default="ALL", max_length=40)
+    notification_type: str = Field(default="all", max_length=30)
+
+
+class DonkiConfigInput(BaseModel):
+    api_key: Optional[str] = Field(default=None, max_length=128)
+    clear_api_key: bool = False
+    auto_advisory_in_eva: Optional[bool] = None
+
+
+class InsightSyncRequest(BaseModel):
+    feedtype: str = Field(default="json", pattern="^json$")
+    version: str = Field(default="1.0", max_length=12)
+
+
 
