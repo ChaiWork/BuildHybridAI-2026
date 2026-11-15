@@ -213,6 +213,172 @@ EXTRA_CORPUS_DICTS: List[Dict[str, Any]] = [
         ],
     },
     {
+        "doc_id": "NASA-HRP-HAZARDS-01",
+        "title": "5 Hazards of Human Spaceflight (NASA HRP Overview)",
+        "agency": "NASA",
+        "year": "2025",
+        "url": "https://www.nasa.gov/hrp/hazards/",
+        "hazard_category": "Distance from Earth",
+        "provenance": "REAL_RESEARCH_REF",
+        "summary": (
+            "NASA Human Research Program overview detailing the five interconnected hazards of human spaceflight: "
+            "space radiation, isolation and confinement, distance from Earth, gravity fields, and hostile/closed environments."
+        ),
+        "sections": [
+            (
+                "Integrated Five-Hazard Mission Framework",
+                "Human missions beyond low-Earth orbit expose crews simultaneously to galactic cosmic rays and solar particle events, "
+                "prolonged isolation and confinement, communication delays and autonomous medical constraints from distance from Earth, "
+                "altered gravity transitions (0g transit to 0.38g Mars or 1g return), and closed-loop spacecraft environments."
+            ),
+        ],
+    },
+    {
+        "doc_id": "NASA-HRP-RISKS-01",
+        "title": "Risks of Human Spaceflight (NASA HRP)",
+        "agency": "NASA",
+        "year": "2025",
+        "url": "https://www.nasa.gov/hrp/risks/",
+        "hazard_category": "Distance from Earth",
+        "provenance": "REAL_RESEARCH_REF",
+        "summary": (
+            "Structured breakdown of physiological, behavioral, and radiation risks across low-Earth orbit (LEO), "
+            "lunar, and Mars exploration mission profiles."
+        ),
+        "sections": [
+            (
+                "Cross-Profile Physiological, Behavioral & Radiation Risks",
+                "NASA HRP characterizes mission-profile risk posture across LEO station increments, lunar/cislunar sorties, "
+                "and long-duration Mars transits, highlighting how autonomous onboard screening and countermeasures scale when Earth resupply "
+                "and real-time clinical consultation are unavailable."
+            ),
+        ],
+    },
+    {
+        "doc_id": "NASA-HRP-CARDIO-01",
+        "title": "Risk of Cardiovascular Adaptations (NASA HRP)",
+        "agency": "NASA",
+        "year": "2025",
+        "url": "https://www.nasa.gov/reference/risk-of-cardiovascular-adaptations/",
+        "hazard_category": "Gravity Fields",
+        "provenance": "REAL_RESEARCH_REF",
+        "summary": (
+            "Addresses spaceflight-induced orthostatic intolerance, arterial remodeling, cardiac spherical remodeling, "
+            "arrhythmia surveillance, and countermeasures including structured exercise and compression gear."
+        ),
+        "sections": [
+            (
+                "Cardiac & Vascular Remodeling and Orthostatic Risk",
+                "Reduced gravitational loading alters intravascular volume distribution and cardiac chamber geometry, contributing to "
+                "arterial stiffness, spherical cardiac remodeling, potential rhythm disturbances, and post-flight or surface-landing orthostatic intolerance."
+            ),
+            (
+                "Cardiovascular Countermeasures",
+                "Validated mitigation combines aerobic and resistive exercise regimens with lower-body compression garments and "
+                "fluid-electrolyte reconditioning ahead of gravitational transitions, subject to active clinical exercise-hold rules."
+            ),
+        ],
+    },
+    {
+        "doc_id": "NASA-HRR-01",
+        "title": "Human Research Roadmap (NASA HRP)",
+        "agency": "NASA",
+        "year": "2025",
+        "url": "https://humanresearchroadmap.nasa.gov/",
+        "hazard_category": "Distance from Earth",
+        "provenance": "REAL_RESEARCH_REF",
+        "summary": (
+            "Comprehensive NASA mapping of human spaceflight health risks, scientific knowledge gaps, and countermeasure evidence "
+            "across exploration architectures."
+        ),
+        "sections": [
+            (
+                "Risks, Knowledge Gaps & Countermeasure Evidence",
+                "The Human Research Roadmap links operational flight risks to prioritized research gaps, ground analogs, ISS investigations, "
+                "and evidence-based countermeasures guiding autonomous crew health support."
+            ),
+        ],
+    },
+    {
+        "doc_id": "NASA-HRP-ONGOING-01",
+        "title": "Ongoing HRP Research in Space (NASA HRP)",
+        "agency": "NASA",
+        "year": "2025",
+        "url": "https://www.nasa.gov/hrp/ongoing-hrp-research/",
+        "hazard_category": "Gravity Fields",
+        "provenance": "REAL_RESEARCH_REF",
+        "summary": (
+            "Overview of current and past NASA Human Research Program investigations across low-Earth orbit and deep-space testbeds."
+        ),
+        "sections": [
+            (
+                "Flight Investigations Across LEO and Deep Space",
+                "Ongoing flight experiments evaluate sensorimotor recovery, cardiovascular adaptation, ocular neuro-vestibular changes, "
+                "immune biomarkers, and behavioral readiness across ISS and Artemis mission architectures."
+            ),
+        ],
+    },
+    {
+        "doc_id": "NASA-ARCHER-01",
+        "title": "ARCHeR — Artemis Research for Crew Health & Readiness",
+        "agency": "NASA",
+        "year": "2025",
+        "url": "https://www.nasa.gov/reference/archer/",
+        "hazard_category": "Isolation and Confinement",
+        "provenance": "REAL_RESEARCH_REF",
+        "summary": (
+            "Deep-space crew health monitoring study for Orion missions integrating actigraphy sleep tracking, "
+            "behavioral performance surveys, sleep disruption assessment, and team dynamics."
+        ),
+        "sections": [
+            (
+                "Actigraphy, Sleep Architecture & Behavioral Readiness",
+                "ARCHeR tracks wrist actigraphy, circadian alignment, sleep contraction, cognitive workload, and crew cohesion metrics "
+                "during Orion deep-space transit to quantify isolation and confinement effects."
+            ),
+        ],
+    },
+    {
+        "doc_id": "NASA-ARTEMIS-STD-01",
+        "title": "Artemis II Standard Measures (NASA HRP)",
+        "agency": "NASA",
+        "year": "2025",
+        "url": "https://www.nasa.gov/reference/artemis-ii-standard-measures/",
+        "hazard_category": "Gravity Fields",
+        "provenance": "REAL_RESEARCH_REF",
+        "summary": (
+            "Baseline physiological measurements across Artemis flights including blood, saliva, and urine biomarkers, "
+            "MRI imaging, vestibular/balance assessments, and post-landing egress tests."
+        ),
+        "sections": [
+            (
+                "Core Biomarker, Imaging & Functional Egress Measures",
+                "Standard Measures establish consistent pre-flight, in-flight, and post-flight baselines spanning biosample assays "
+                "(blood, saliva, urine), structural MRI, sensorimotor balance testing, and functional capsule egress performance."
+            ),
+        ],
+    },
+    {
+        "doc_id": "NASA-IMMUNE-BIO-01",
+        "title": "Immune Biomarkers Study (NASA HRP)",
+        "agency": "NASA",
+        "year": "2025",
+        "url": "https://www.nasa.gov/reference/immune-biomarkers/",
+        "hazard_category": "Hostile and Closed Environments",
+        "provenance": "REAL_RESEARCH_REF",
+        "summary": (
+            "Investigates spaceflight immune dysregulation and stress-hormone shifts using non-invasive pocket saliva blotting paper "
+            "booklets and biological specimen collection protocols."
+        ),
+        "sections": [
+            (
+                "Saliva Blotting Paper Booklets & Stress-Immune Monitoring",
+                "Spaceflight stressors, circadian disruption, and closed-habitat confinement can alter immune signaling and stress hormones; "
+                "pocket saliva blotting booklets enable compact specimen preservation for downstream laboratory biomarker assays without auto-diagnosing clinical infection."
+            ),
+        ],
+    },
+    {
         "doc_id": "TARSCARE-SPEC-01",
         "title": "TARS Care Operational Safety Rules: Insufficient Evidence, Conflict Handling & Scope",
         "agency": "TARS Care System Spec",

@@ -1132,3 +1132,438 @@ def test_insight_mars_weather_normalization_gaps_offline_and_habitat_isolation(c
     assert client.get("/api/insight/state").json()["summary"]["sol_count"] == 2
 
 
+def test_rag_section1_and_2_nasa_hrp_corpus_entries(client):
+    """RAG: Sections 1 & 2 NASA HRP & Flight Study resources are indexed and retrievable offline."""
+    state = client.get("/api/state").json()
+    doc_ids = {d["doc_id"] for d in state["knowledge_corpus"]}
+    expected_ids = {
+        "NASA-HRP-HAZARDS-01",
+        "NASA-HRP-RISKS-01",
+        "NASA-HRP-CARDIO-01",
+        "NASA-HRR-01",
+        "NASA-HRP-ONGOING-01",
+        "NASA-ARCHER-01",
+        "NASA-ARTEMIS-STD-01",
+        "NASA-IMMUNE-BIO-01",
+    }
+    assert expected_ids.issubset(doc_ids)
+
+    rag_cardio = client.post(
+        "/api/rag/query",
+        json={"question": "What does NASA HRP say about cardiac spherical remodeling and orthostatic intolerance?"},
+    )
+    assert rag_cardio.status_code == 200
+    c_ids = {c["doc_id"] for c in rag_cardio.json()["citations"]}
+    assert "NASA-HRP-CARDIO-01" in c_ids
+
+    rag_immune = client.post(
+        "/api/rag/query",
+        json={"question": "How are pocket saliva blotting paper booklets used in the Immune Biomarkers Study?"},
+    )
+    assert rag_immune.status_code == 200
+    i_ids = {c["doc_id"] for c in rag_immune.json()["citations"]}
+    assert "NASA-IMMUNE-BIO-01" in i_ids
+
+
+def test_part1_food_and_life_support_supplies_management(client):
+    """Part 1: Food inventory CRUD, meal consumption, nutrition tracking, 120-portion/20-day estimator, and expired food block."""
+    r_nom = client.post("/api/scenario/nominal")
+    assert r_nom.status_code == 200
+
+    f_res = client.get("/api/food/state")
+    assert f_res.status_code == 200
+    f_state = f_res.json()
+    assert f_state["summary"]["total_food_items"] >= 8
+    categories = {item["category"] for item in f_state["items"]}
+    for required_cat in (
+        "Freeze-dried meals",
+        "Ready-to-eat meals",
+        "Snacks",
+        "Fruits and vegetables",
+        "Protein sources",
+        "Beverages",
+        "Emergency food supplies",
+        "Potable Water & Hydration",
+    ):
+        assert required_cat in categories
+
+    # Benchmark Remaining Supply Estimator check: 120 portions / (2 astronauts * 3 portions/day) = 20.0 days
+    est_res = client.post(
+        "/api/food/estimate",
+        json={
+            "total_portions": 120.0,
+            "astronaut_count": 2,
+            "portions_per_astronaut_per_day": 3.0,
+            "current_sol": 184,
+            "planned_mission_end_sol": 500,
+            "next_resupply_sol": 240,
+        },
+    )
+    assert est_res.status_code == 200
+    est = est_res.json()
+    assert est["daily_crew_consumption_rate"] == 6.0
+    assert est["estimated_remaining_days"] == 20.0
+    assert est["projected_depletion_sol"] == 204
+    assert est["covers_full_mission"] is False
+    assert est["is_projection"] is True
+
+    # Add a new food item
+    add_res = client.post(
+        "/api/food/items",
+        json={
+            "name": "Thermostabilized Lentil & Quinoa Stew",
+            "category": "Ready-to-eat meals",
+            "quantity": 24.0,
+            "unit": "pouches",
+            "calories_per_serving": 410.0,
+            "protein_g": 19.0,
+            "carbs_g": 54.0,
+            "fat_g": 11.0,
+            "water_ml_per_serving": 180.0,
+            "micronutrients": {"iron_mg": 4.2, "potassium_mg": 520.0},
+            "nutrition_complete": True,
+            "storage_requirements": "Ambient Galley Locker B2",
+            "expiry_date": "2027-08-01",
+            "expiry_sol": 420,
+            "food_source": "Pre-positioned Cargo Supply",
+            "min_threshold": 6.0,
+            "critical_threshold": 2.0,
+        },
+    )
+    assert add_res.status_code == 200
+    new_item = add_res.json()["item"]
+    item_uid = new_item["item_uid"]
+    assert new_item["status"] == "AVAILABLE"
+    assert new_item["provenance"] == "USER_ENTERED"
+
+    # Update food item quantity & resupply
+    upd_res = client.put(
+        f"/api/food/items/{item_uid}",
+        json={"quantity": 20.0, "notes": "Updated after stowage audit"},
+    )
+    assert upd_res.status_code == 200
+    assert upd_res.json()["item"]["quantity"] == 20.0
+
+    resup_res = client.post(
+        "/api/food/resupply",
+        json={
+            "food_item_uid": item_uid,
+            "quantity_added": 10.0,
+            "source": "Cargo Resupply Module",
+            "notes": "Logistics transfer",
+        },
+    )
+    assert resup_res.status_code == 200
+    updated_after_resup = next(
+        i for i in resup_res.json()["food_state"]["items"] if i["item_uid"] == item_uid
+    )
+    assert updated_after_resup["quantity"] == 30.0
+
+    # Record meal consumption and verify stock deduction + daily nutritional intake
+    cal_before = resup_res.json()["food_state"]["nutrition_overview"]["recorded"]["calories_kcal"]
+    con_res = client.post(
+        "/api/food/consume",
+        json={
+            "food_item_uid": item_uid,
+            "quantity_consumed": 2.0,
+            "meal_type": "Lunch",
+            "notes": "Post-EVA recovery meal",
+        },
+    )
+    assert con_res.status_code == 200
+    con_body = con_res.json()
+    updated_item = next(i for i in con_body["food_state"]["items"] if i["item_uid"] == item_uid)
+    assert updated_item["quantity"] == 28.0
+    cal_after = con_body["food_state"]["nutrition_overview"]["recorded"]["calories_kcal"]
+    assert round(cal_after - cal_before, 1) == 820.0
+
+    # Configure per-astronaut nutritional targets
+    tgt_res = client.post(
+        "/api/food/targets",
+        json={
+            "calories_target_kcal": 2950.0,
+            "protein_target_g": 125.0,
+            "carbs_target_g": 370.0,
+            "fat_target_g": 92.0,
+            "water_target_ml": 2700.0,
+            "notes": "EVA-intensive surface exploration ration target",
+        },
+    )
+    assert tgt_res.status_code == 200
+    assert tgt_res.json()["targets"]["calories_target_kcal"] == 2950.0
+
+    # Expired food item must never be recommended or consumed
+    exp_add = client.post(
+        "/api/food/items",
+        json={
+            "name": "Expired hydroponic salad pack",
+            "category": "Fruits and vegetables",
+            "quantity": 3.0,
+            "unit": "packs",
+            "calories_per_serving": 65.0,
+            "expiry_date": "2026-09-01",
+            "expiry_sol": 120,
+        },
+    )
+    assert exp_add.status_code == 200
+    exp_item = exp_add.json()["item"]
+    assert exp_item["status"] == "EXPIRED"
+
+    exp_consume = client.post(
+        "/api/food/consume",
+        json={"food_item_uid": exp_item["item_uid"], "quantity_consumed": 1.0, "meal_type": "Snack"},
+    )
+    assert exp_consume.status_code == 400
+    assert "expired" in exp_consume.json()["detail"].lower()
+
+    # Safe removal of expired item
+    del_res = client.delete(f"/api/food/items/{exp_item['item_uid']}")
+    assert del_res.status_code == 200
+    assert del_res.json()["removed"]["removed_item_uid"] == exp_item["item_uid"]
+
+
+def test_part2_distance_from_earth_comm_simulator_and_message_centre(client):
+    """Part 2: Comm delay scenarios (4-24 min Mars range), round-trip calculation, offline queueing, failure retry, and sync."""
+    # Switch to Mars Transit Cruise (8.1 min one-way -> 16.2 min round-trip)
+    sim_transit = client.post(
+        "/api/comm/simulator",
+        json={"scenario_id": "MARS_TRANSIT_CRUISE"},
+    )
+    assert sim_transit.status_code == 200
+    c_transit = sim_transit.json()["comm_centre_state"]
+    assert c_transit["one_way_delay_minutes"] == 8.1
+    assert c_transit["round_trip_delay_minutes"] == 16.2
+    assert c_transit["comm_condition"] == "DELAYED"
+
+    # Custom Mars distance & one-way delay (18.5 min -> 37.0 min round-trip)
+    sim_custom = client.post(
+        "/api/comm/simulator",
+        json={
+            "scenario_id": "MARS_SURFACE_NOMINAL",
+            "comm_condition": "DELAYED",
+            "one_way_delay_minutes": 18.5,
+            "distance_million_km": 333.0,
+        },
+    )
+    assert sim_custom.status_code == 200
+    c_custom = sim_custom.json()["comm_centre_state"]
+    assert c_custom["one_way_delay_minutes"] == 18.5
+    assert c_custom["round_trip_delay_minutes"] == 37.0
+
+    # Save a Draft message in the Message Centre
+    draft_res = client.post(
+        "/api/comm/messages",
+        json={
+            "message_type": "MISSION_CONTROL_MESSAGE",
+            "priority": "NORMAL",
+            "subject": "Draft Habitat Logistics Note",
+            "body": "Preparing weekly galley and filter inventory summary.",
+            "save_as_draft": True,
+        },
+    )
+    assert draft_res.status_code == 200
+    assert draft_res.json()["message"]["status"] == "Draft"
+
+    # Switch to Mars Solar Conjunction Blackout (OFFLINE)
+    sim_blackout = client.post(
+        "/api/comm/simulator",
+        json={"scenario_id": "MARS_SOLAR_CONJUNCTION"},
+    )
+    assert sim_blackout.status_code == 200
+    assert sim_blackout.json()["comm_centre_state"]["comm_condition"] == "BLACKOUT"
+    assert sim_blackout.json()["state"]["assessment"]["comm_mode"]["mode"] == "OFFLINE"
+
+    # Queue an URGENT message during blackout -> status must be Waiting for Connection (never Sent!)
+    queued_res = client.post(
+        "/api/comm/messages",
+        json={
+            "message_type": "HEALTH_REPORT",
+            "priority": "URGENT",
+            "subject": "Sol 184 Offline Health & Dosimetry Packet",
+            "body": "Autonomous onboard check completed during solar conjunction blackout.",
+            "save_as_draft": False,
+        },
+    )
+    assert queued_res.status_code == 200
+    q_msg = queued_res.json()["message"]
+    assert q_msg["status"] == "Waiting for Connection"
+    assert q_msg["priority"] == "URGENT"
+
+    # Attempting to sync during blackout reports BLOCKED_OFFLINE and leaves message Waiting for Connection
+    sync_off = client.post("/api/comm/sync")
+    assert sync_off.status_code == 200
+    assert sync_off.json()["sync_result"]["status"] == "BLOCKED_OFFLINE"
+    assert sync_off.json()["state"]["comm_centre_state"]["sync_history"][0]["status"] == "BLOCKED_OFFLINE"
+
+    # Restore Mars Surface Nominal link and test simulated transmission failure -> Failed status
+    client.post("/api/comm/simulator", json={"scenario_id": "MARS_SURFACE_NOMINAL"})
+    fail_msg_res = client.post(
+        "/api/comm/messages",
+        json={
+            "message_type": "SUPPLY_STATUS_REPORT",
+            "priority": "IMPORTANT",
+            "subject": "Packet Drops Under Dust Relay Attenuation",
+            "body": "Testing failed uplink recovery.",
+            "save_as_draft": False,
+            "simulate_failure": True,
+        },
+    )
+    assert fail_msg_res.status_code == 200
+    failed_msg = fail_msg_res.json()["message"]
+    assert failed_msg["status"] == "Failed"
+    assert failed_msg["retry_count"] == 0
+
+    # Retry the failed message cleanly -> Sent status & retry_count incremented
+    retry_res = client.post(
+        f"/api/comm/messages/{failed_msg['message_uid']}/retry",
+        json={"simulate_failure": False},
+    )
+    assert retry_res.status_code == 200
+    assert retry_res.json()["message"]["status"] == "Sent"
+    assert retry_res.json()["message"]["retry_count"] == 1
+    assert retry_res.json()["message"]["sent_at"] is not None
+
+    # Synchronize all remaining queued messages
+    sync_ok = client.post("/api/comm/sync")
+    assert sync_ok.status_code == 200
+    assert sync_ok.json()["sync_result"]["status"] in ("SYNCHRONIZED", "DELAYED_SYNC", "SYNCED", "SYNCED_DELAYED")
+    assert sync_ok.json()["state"]["comm_centre_state"]["sync_history"][0]["status"] == "SUCCESS"
+
+
+def test_part3_and_4_personal_journal_ai_companion_privacy_and_five_hazard_integration(client):
+    """Part 3 & 4: Private journal CRUD, mood check-in isolation, explicit AI consent, exercise-hold safety, crisis escalation, and 5-hazard integration."""
+    r_nom = client.post("/api/scenario/nominal")
+    assert r_nom.status_code == 200
+    hr_before = r_nom.json()["latest_telemetry"]["heart_rate_bpm"]
+
+    # 1. Verify default privacy settings: AI journal context consent is False by default
+    c_state = client.get("/api/companion/state").json()
+    assert c_state["privacy_settings"]["allow_ai_journal_context"] is False
+
+    # 2. Create a private journal entry (marked allow_ai_access=True so we can test both consent False and True)
+    j_create = client.post(
+        "/api/journal/entries",
+        json={
+            "title": "Watching Earthrise Photograph from Galley Window",
+            "content": "Missed my sister's birthday dinner in Toronto today, but sharing freeze-dried mango with the crew helped.",
+            "mood": "Low",
+            "feelings": ["Homesick", "Lonely", "Calm"],
+            "tags": ["family", "galley", "sol-184"],
+            "guided_prompt": "Are you missing anyone or anything from Earth?",
+            "is_private": True,
+            "allow_ai_access": True,
+        },
+    )
+    assert j_create.status_code == 200
+    entry = j_create.json()["entry"]
+    entry_uid = entry["entry_uid"]
+    assert entry["mood"] == "Low"
+    assert "Homesick" in entry["feelings"]
+
+    # Edit journal entry
+    j_edit = client.put(
+        f"/api/journal/entries/{entry_uid}",
+        json={"title": "Watching Earth Photograph from Galley Window (Updated)", "tags": ["family", "earth"]},
+    )
+    assert j_edit.status_code == 200
+    assert "(Updated)" in j_edit.json()["entry"]["title"]
+
+    # Filter & search journal entries
+    j_search = client.get("/api/journal/entries", params={"search": "Toronto", "mood": "Low", "tag": "family"})
+    assert j_search.status_code == 200
+    found_ids = {e["entry_uid"] for e in j_search.json()["entries"]}
+    assert entry_uid in found_ids
+
+    # 3. Record optional self-reported mood check-in -> must NOT alter physiological telemetry
+    m_res = client.post(
+        "/api/companion/mood-checkin",
+        json={
+            "mood": "Positive",
+            "feelings": ["Motivated", "Calm"],
+            "note": "Feeling steadier after journaling",
+        },
+    )
+    assert m_res.status_code == 200
+    assert m_res.json()["checkin"]["mood"] == "Positive"
+    assert m_res.json()["state"]["latest_telemetry"]["heart_rate_bpm"] == hr_before
+
+    # 4. Chat with AI Companion while allow_ai_journal_context is False -> must NOT use journal context
+    chat_no_consent = client.post(
+        "/api/companion/chat",
+        json={
+            "message": "I miss my family on Earth today.",
+            "mode": "COMPANION_CHAT",
+        },
+    )
+    assert chat_no_consent.status_code == 200
+    assert chat_no_consent.json()["used_journal_context"] is False
+    assert chat_no_consent.json()["assistant_message"]["support_tier"] in ("ORDINARY_COMPANIONSHIP", "EMOTIONAL_SUPPORT")
+
+    # 5. Explicitly enable allow_ai_journal_context consent -> Companion may now reference shared journal entry
+    priv_on = client.post("/api/companion/privacy", json={"allow_ai_journal_context": True})
+    assert priv_on.status_code == 200
+    assert priv_on.json()["privacy_settings"]["allow_ai_journal_context"] is True
+
+    chat_with_consent = client.post(
+        "/api/companion/chat",
+        json={
+            "message": "Help me reflect on what happened today.",
+            "mode": "GUIDED_REFLECTION",
+        },
+    )
+    assert chat_with_consent.status_code == 200
+    assert chat_with_consent.json()["used_journal_context"] is True
+
+    # 6. Exercise Hold cross-check: under critical_orthostatic scenario, companion must NOT suggest vigorous exercise
+    client.post("/api/scenario/critical_orthostatic")
+    chat_hold = client.post(
+        "/api/companion/chat",
+        json={"message": "Today was a difficult mission day and I feel stressed.", "mode": "COMPANION_CHAT"},
+    )
+    assert chat_hold.status_code == 200
+    assert chat_hold.json()["exercise_contraindicated"] is True
+    coping_text = " ".join(s.lower() for s in chat_hold.json()["assistant_message"]["suggested_coping"])
+    assert "hold" in coping_text or "restful" in coping_text
+
+    # 7. Psychological Safety Escalation: severe crisis input triggers IMMEDIATE_SAFETY_ESCALATION
+    chat_crisis = client.post(
+        "/api/companion/chat",
+        json={"message": "I feel hopeless and want to end my life.", "mode": "COMPANION_CHAT"},
+    )
+    assert chat_crisis.status_code == 200
+    crisis_body = chat_crisis.json()
+    assert crisis_body["assistant_message"]["support_tier"] == "IMMEDIATE_SAFETY_ESCALATION"
+    assert crisis_body["assistant_message"]["safety_escalation_triggered"] is True
+    assert crisis_body["escalation_info"]["triggered"] is True
+
+    # Queue an urgent support request to CMO & Mission Control (without leaking private journal content)
+    esc_res = client.post(
+        "/api/companion/escalate-support",
+        json={"summary_note": "Astronaut requested immediate CMO & Flight Surgeon behavioral support", "queue_urgent_report": True},
+    )
+    assert esc_res.status_code == 200
+    esc_msg = esc_res.json()["queued_message"]
+    assert esc_msg["priority"] == "URGENT"
+    assert "Toronto" not in esc_msg["body"]
+
+    # Delete the test journal entry cleanly
+    j_del = client.delete(f"/api/journal/entries/{entry_uid}")
+    assert j_del.status_code == 200
+    assert j_del.json()["deleted"]["entry_uid"] == entry_uid
+
+    # 8. Verify Five-Hazard Support Integration exists in assessment
+    five_hz = esc_res.json()["state"]["assessment"]["five_hazard_support_integration"]
+    for hz_key in (
+        "Space Radiation",
+        "Isolation and Confinement",
+        "Distance from Earth",
+        "Gravity Fields",
+        "Hostile and Closed Environments",
+    ):
+        assert hz_key in five_hz
+        assert "connected_modules" in five_hz[hz_key]
+        assert "summary" in five_hz[hz_key]
+
+
+
+

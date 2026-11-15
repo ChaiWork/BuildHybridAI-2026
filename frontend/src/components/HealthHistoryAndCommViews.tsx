@@ -7,12 +7,19 @@ import {
   Eye,
   EyeOff,
   FileText,
+  Globe,
   Lock,
+  Plus,
+  Radio,
   RefreshCw,
+  RotateCcw,
+  Send,
   ShieldAlert,
+  Trash2,
   Unlock,
   Wifi,
   WifiOff,
+  Clock,
 } from 'lucide-react';
 import { FullSystemState, SyncResponse } from '../types';
 import {
@@ -693,9 +700,30 @@ export const CommunicationStatusView: React.FC<CommProps> = ({
   const [aiBusy, setAiBusy] = useState(false);
   const [aiNotice, setAiNotice] = useState<string | null>(null);
 
+  const commCentre = state.comm_centre_state;
   const currentMode = state.assessment.comm_mode?.mode || 'DELAYED';
-  const pendingCount = state.comm_state.pending_reports_count ??
+  const pendingCount =
+    state.comm_state.pending_reports_count ??
     state.store_forward_reports.filter((r) => r.transmission_status !== 'SYNCHRONIZED_ACK').length;
+
+  // Delay simulator form state
+  const [customDelayMin, setCustomDelayMin] = useState<number>(
+    commCentre?.one_way_delay_minutes ?? state.comm_state.one_way_delay_minutes ?? 14.2
+  );
+  const [customDistanceMkm, setCustomDistanceMkm] = useState<number>(
+    commCentre?.distance_million_km ?? state.comm_state.distance_million_km ?? 255.4
+  );
+
+  // Message Centre compose state
+  const [msgForm, setMsgForm] = useState({
+    subject: '',
+    body: '',
+    recipient: 'Earth Mission Control & Flight Surgeons (MCC-Houston)',
+    message_type: 'MISSION_CONTROL_MESSAGE',
+    priority: 'NORMAL',
+    save_as_draft: false,
+    simulate_failure: false,
+  });
 
   const setCommMode = async (mode: 'CONNECTED' | 'DELAYED' | 'OFFLINE') => {
     setBusy(true);
@@ -711,6 +739,127 @@ export const CommunicationStatusView: React.FC<CommProps> = ({
       setNotice(`Communication simulation switched to ${mode}. All health features remain active onboard.`);
     } catch (err) {
       setSyncError(err instanceof Error ? err.message : 'Unable to switch communication mode.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const applyScenarioPreset = async (scenarioId: string) => {
+    setBusy(true);
+    setNotice(null);
+    setSyncError(null);
+    try {
+      const res = await apiRequest<{ state?: FullSystemState; comm_centre_state?: any }>(
+        '/api/comm/simulator',
+        {
+          method: 'POST',
+          body: JSON.stringify({ scenario_id: scenarioId }),
+        }
+      );
+      if (res.state) {
+        onStateUpdated(res.state);
+        if (res.state.comm_centre_state) {
+          setCustomDelayMin(res.state.comm_centre_state.one_way_delay_minutes);
+          setCustomDistanceMkm(res.state.comm_centre_state.distance_million_km);
+        }
+      }
+      setNotice(`Loaded mission communication preset: ${scenarioId}.`);
+    } catch (err) {
+      setSyncError(err instanceof Error ? err.message : 'Unable to load scenario preset.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const applyCustomSimulator = async (conditionOverride?: string) => {
+    setBusy(true);
+    setNotice(null);
+    setSyncError(null);
+    try {
+      const res = await apiRequest<{ state?: FullSystemState }>('/api/comm/simulator', {
+        method: 'POST',
+        body: JSON.stringify({
+          comm_condition: conditionOverride || commCentre?.comm_condition || 'DELAYED',
+          one_way_delay_minutes: Number(customDelayMin),
+          distance_million_km: Number(customDistanceMkm),
+        }),
+      });
+      if (res.state) onStateUpdated(res.state);
+      setNotice(
+        `Configured communication delay simulator: ${customDelayMin} min one-way (${(
+          Number(customDelayMin) * 2
+        ).toFixed(1)} min round-trip) at ${customDistanceMkm}M km.`
+      );
+    } catch (err) {
+      setSyncError(err instanceof Error ? err.message : 'Unable to update simulator.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleComposeMessage = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!msgForm.subject.trim() || !msgForm.body.trim()) return;
+    setBusy(true);
+    setNotice(null);
+    setSyncError(null);
+    try {
+      const res = await apiRequest<{ message: any; state?: FullSystemState }>(
+        '/api/comm/messages',
+        {
+          method: 'POST',
+          body: JSON.stringify(msgForm),
+        }
+      );
+      if (res.state) onStateUpdated(res.state);
+      setMsgForm({
+        ...msgForm,
+        subject: '',
+        body: '',
+        save_as_draft: false,
+        simulate_failure: false,
+      });
+      setNotice(`Message "${res.message.subject}" recorded with status: ${res.message.status}.`);
+    } catch (err) {
+      setSyncError(err instanceof Error ? err.message : 'Failed to create message.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleRetryOrSendMessage = async (messageUid: string, simulateFail = false) => {
+    setBusy(true);
+    setNotice(null);
+    setSyncError(null);
+    try {
+      const res = await apiRequest<{ message: any; state?: FullSystemState }>(
+        `/api/comm/messages/${messageUid}/retry`,
+        {
+          method: 'POST',
+          body: JSON.stringify({ simulate_failure: simulateFail }),
+        }
+      );
+      if (res.state) onStateUpdated(res.state);
+      setNotice(
+        `Transmission status for "${res.message.subject}": ${res.message.status}${
+          res.message.failure_reason ? ` (${res.message.failure_reason})` : ''
+        }`
+      );
+    } catch (err) {
+      setSyncError(err instanceof Error ? err.message : 'Failed to retry message.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleDeleteMessage = async (messageUid: string) => {
+    setBusy(true);
+    try {
+      const res = await apiRequest<{ state?: FullSystemState }>(
+        `/api/comm/messages/${messageUid}`,
+        { method: 'DELETE' }
+      );
+      if (res.state) onStateUpdated(res.state);
     } finally {
       setBusy(false);
     }
@@ -734,11 +883,12 @@ export const CommunicationStatusView: React.FC<CommProps> = ({
       if (!sr || sr.status === 'BLOCKED_OFFLINE') {
         setSyncError(
           sr?.message ||
-          'Synchronization blocked while Offline (Blackout). Switch to Delayed or Connected to transmit queued packets.',
+            'Synchronization blocked while Offline (Blackout). Switch to Delayed or Connected to transmit queued packets.'
         );
       } else {
         setNotice(
-          `Synchronized ${sr.synchronized_count} queued store-and-forward report(s); ${sr.remaining_queued} remaining.`,
+          sr.message ||
+            `Synchronized ${sr.synchronized_count} queued store-and-forward report(s); ${sr.remaining_queued} remaining.`
         );
       }
     } catch (err) {
@@ -749,28 +899,134 @@ export const CommunicationStatusView: React.FC<CommProps> = ({
   };
 
   const aiStatus = state.local_ai_status;
+  const oneWayDelay = commCentre?.one_way_delay_minutes ?? state.comm_state.one_way_delay_minutes ?? 14.2;
+  const roundTripDelay = commCentre?.round_trip_delay_minutes ?? Number((oneWayDelay * 2).toFixed(2));
+  const commCondition = commCentre?.comm_condition ?? (currentMode === 'OFFLINE' ? 'BLACKOUT' : currentMode === 'CONNECTED' ? 'NORMAL' : 'DELAYED');
+
+  const msgStatusBadge = (st: string) => {
+    switch (st) {
+      case 'Sent':
+        return (
+          <span className="mc-pill bg-emerald-500/15 text-emerald-300 border border-emerald-500/30">
+            Sent (Confirmed)
+          </span>
+        );
+      case 'Queued':
+      case 'Sending':
+        return (
+          <span className="mc-pill bg-[#A5D8FF]/15 text-[#A5D8FF] border border-[#A5D8FF]/30">
+            {st}
+          </span>
+        );
+      case 'Waiting for Connection':
+        return (
+          <span className="mc-pill bg-amber-500/15 text-amber-300 border border-amber-500/30">
+            Waiting for Connection
+          </span>
+        );
+      case 'Failed':
+        return (
+          <span className="mc-pill bg-rose-500/20 text-rose-300 border border-rose-500/40">
+            Failed (Retry Available)
+          </span>
+        );
+      default:
+        return (
+          <span className="mc-pill bg-white/10 text-[#E5E5E4]">
+            {st}
+          </span>
+        );
+    }
+  };
 
   return (
     <div className="space-y-6">
+      {/* PART 2.8: MISSION COMMUNICATION DASHBOARD */}
       <section className="mc-card p-6 space-y-5">
         <div className="flex flex-wrap items-center justify-between gap-4">
           <div>
-            <h1 className="text-2xl font-bold text-[#FAF9FA]">Earth Communication &amp; Offline Readiness</h1>
-            <p className="text-sm text-[#E5E5E4]/80 mt-1">
-              Test Connected, Delayed, and Offline deep-space states without losing autonomous health support.
+            <div className="flex flex-wrap items-center gap-2.5 mb-1">
+              <h1 className="text-2xl font-bold text-[#FAF9FA]">
+                Distance from Earth &amp; Mission Communication
+              </h1>
+              <span className="mc-pill bg-white/5 text-[#8E95A8] border border-white/10">
+                Source: {commCentre?.telemetry_source_type || 'CONFIGURED_SIMULATION'}
+              </span>
+            </div>
+            <p className="text-sm text-[#E5E5E4]/80">
+              {commCentre?.mission_location || 'Jezero-Elysium Frontier Habitat · Mars Surface (0.38g)'} &rarr;{' '}
+              {commCentre?.mission_destination || 'Mars Surface Operations'}
             </p>
           </div>
           <span
-            className={`px-4 py-1.5 rounded-full text-sm font-semibold inline-flex items-center gap-2 ${currentMode === 'CONNECTED'
-              ? 'bg-emerald-500/15 text-emerald-300 border border-emerald-500/30'
-              : currentMode === 'OFFLINE'
+            className={`px-4 py-1.5 rounded-full text-sm font-semibold inline-flex items-center gap-2 ${
+              currentMode === 'CONNECTED'
+                ? 'bg-emerald-500/15 text-emerald-300 border border-emerald-500/30'
+                : currentMode === 'OFFLINE'
                 ? 'bg-red-500/15 text-red-300 border border-red-500/30'
                 : 'bg-amber-500/15 text-amber-300 border border-amber-500/30'
-              }`}
+            }`}
           >
             {currentMode === 'OFFLINE' ? <WifiOff className="w-4 h-4" /> : <Wifi className="w-4 h-4" />}
-            <span>{state.assessment.comm_mode?.label || currentMode}</span>
+            <span>
+              {commCondition} · {state.assessment.comm_mode?.label || currentMode}
+            </span>
           </span>
+        </div>
+
+        {/* Key Telemetry Metrics Grid */}
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 text-xs">
+          <div className="rounded-xl bg-[#0B0D1A] p-3.5">
+            <span className="text-[#8E95A8] block">Distance from Earth</span>
+            <span className="text-lg font-bold text-[#FAF9FA] tabular-nums mt-1 block">
+              {commCentre?.distance_million_km ?? state.comm_state.distance_million_km} M km
+            </span>
+            <span className="text-[11px] text-[#A5D8FF]">{commCentre?.distance_au ?? 1.707} AU</span>
+          </div>
+
+          <div className="rounded-xl bg-[#0B0D1A] p-3.5">
+            <span className="text-[#8E95A8] block">One-Way Signal Delay</span>
+            <span className="text-lg font-bold text-[#FAF9FA] tabular-nums mt-1 block">
+              {oneWayDelay} min
+            </span>
+            <span className="text-[11px] text-[#8E95A8]">Mars range: ~4–24 min</span>
+          </div>
+
+          <div className="rounded-xl bg-[#0B0D1A] p-3.5">
+            <span className="text-[#8E95A8] block">Round-Trip Delay</span>
+            <span className="text-lg font-bold text-[#FAF9FA] tabular-nums mt-1 block">
+              {roundTripDelay} min
+            </span>
+            <span className="text-[11px] text-[#8E95A8]">2 &times; one-way light time</span>
+          </div>
+
+          <div className="rounded-xl bg-[#0B0D1A] p-3.5">
+            <span className="text-[#8E95A8] block">Pending Messages</span>
+            <span className="text-lg font-bold text-[#FAF9FA] tabular-nums mt-1 block">
+              {commCentre?.pending_messages_count ?? 0} queued
+            </span>
+            <span className="text-[11px] text-[#8E95A8]">
+              {commCentre?.draft_messages_count ?? 0} draft(s)
+            </span>
+          </div>
+
+          <div className="rounded-xl bg-[#0B0D1A] p-3.5">
+            <span className="text-[#8E95A8] block">Unsent Health Reports</span>
+            <span className="text-lg font-bold text-[#FAF9FA] tabular-nums mt-1 block">
+              {pendingCount} packet(s)
+            </span>
+            <span className="text-[11px] text-[#8E95A8]">Store-and-forward queue</span>
+          </div>
+
+          <div className="rounded-xl bg-[#0B0D1A] p-3.5">
+            <span className="text-[#8E95A8] block">Next Comm Window</span>
+            <span className="text-xs font-semibold text-[#FAF9FA] mt-1 block">
+              {commCentre?.next_comm_window_utc || 'Scheduled DSN Orbiter Pass'}
+            </span>
+            <span className="text-[11px] text-[#8E95A8]">
+              Last sync: {formatRecordedTime(state.comm_state.last_sync_timestamp)}
+            </span>
+          </div>
         </div>
 
         {/* 3-State Mode Simulation Buttons */}
@@ -778,18 +1034,18 @@ export const CommunicationStatusView: React.FC<CommProps> = ({
           {([
             {
               id: 'CONNECTED',
-              title: 'Connected',
+              title: 'Connected (Normal Near-Earth)',
               desc: 'Simulated low-latency direct link (0 min delay). Reports acknowledge upon submission.',
             },
             {
               id: 'DELAYED',
               title: 'Delayed (Mars Nominal)',
-              desc: `Simulated deep-space delay (${state.comm_state.one_way_delay_minutes} min one-way). Assessments execute autonomously onboard.`,
+              desc: `Simulated deep-space delay (${oneWayDelay} min one-way / ${roundTripDelay} min round-trip). Assessments execute autonomously onboard.`,
             },
             {
               id: 'OFFLINE',
-              title: 'Offline (Blackout)',
-              desc: 'Zero Earth link (solar conjunction). All RAG answers, body checks, and reports queue locally.',
+              title: 'Offline (Communication Blackout)',
+              desc: 'Zero Earth link (solar conjunction). All health assessments, food logs, journals, and AI companion operate 100% locally.',
             },
           ] as const).map((opt) => {
             const active = currentMode === opt.id;
@@ -799,10 +1055,11 @@ export const CommunicationStatusView: React.FC<CommProps> = ({
                 type="button"
                 disabled={busy}
                 onClick={() => setCommMode(opt.id)}
-                className={`rounded-2xl p-4 text-left transition-colors border ${active
-                  ? 'bg-[#A5D8FF]/15 border-[#A5D8FF]'
-                  : 'bg-[#0B0D1A] border-white/[0.08] hover:border-[#A5D8FF]/45'
-                  }`}
+                className={`rounded-2xl p-4 text-left transition-colors border ${
+                  active
+                    ? 'bg-[#A5D8FF]/15 border-[#A5D8FF]'
+                    : 'bg-[#0B0D1A] border-white/[0.08] hover:border-[#A5D8FF]/45'
+                }`}
               >
                 <div className="flex items-center justify-between mb-1.5">
                   <strong className="text-base text-[#FAF9FA]">{opt.title}</strong>
@@ -828,42 +1085,345 @@ export const CommunicationStatusView: React.FC<CommProps> = ({
         )}
       </section>
 
-      {/* Queue Sync + Local AI Engine Readiness */}
-      <section className="grid grid-cols-1 lg:grid-cols-2 gap-5">
-        <div className="mc-card p-5 lg:p-6 space-y-4">
-          <h2 className="text-lg font-semibold text-[#FAF9FA]">Store-and-Forward Telemetry Queue</h2>
-          <div className="grid grid-cols-2 gap-3 text-sm">
-            <div className="rounded-xl bg-[#0B0D1A] p-3.5">
-              <div className="text-xs text-[#E5E5E4]/70">Distance from Earth</div>
-              <div className="text-xl font-bold text-[#FAF9FA] tabular-data mt-1">
-                {state.comm_state.distance_million_km} M km
+      {/* PART 2.9: CONFIGURABLE COMMUNICATION DELAY SIMULATOR */}
+      <section className="mc-card p-6 space-y-5">
+        <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-2">
+          <div>
+            <h2 className="text-lg font-semibold text-[#FAF9FA] flex items-center gap-2">
+              <Radio className="w-4 h-4 text-[#A5D8FF]" />
+              Mission Trajectory &amp; Communication Delay Simulator
+            </h2>
+            <p className="text-xs text-[#8E95A8] mt-0.5">
+              {commCentre?.latency_explanation ||
+                'Distance governs one-way light time (~4–24 min for Mars), while actual communication availability also depends on spacecraft antennas, relay orbiters, and solar conjunction.'}
+            </p>
+          </div>
+        </div>
+
+        {/* Demonstration Scenario Presets */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 text-xs">
+          {(commCentre?.scenario_presets || []).map((preset) => {
+            const isSelected = commCentre?.scenario_id === preset.scenario_id;
+            return (
+              <button
+                key={preset.scenario_id}
+                type="button"
+                disabled={busy}
+                onClick={() => applyScenarioPreset(preset.scenario_id)}
+                className={`p-3.5 rounded-xl text-left transition-all ${
+                  isSelected
+                    ? 'bg-[#A5D8FF]/15 border border-[#A5D8FF]'
+                    : 'bg-[#0B0D1A] hover:bg-white/[0.04]'
+                }`}
+              >
+                <div className="flex items-center justify-between gap-2 mb-1">
+                  <span className="font-semibold text-[#FAF9FA]">{preset.label}</span>
+                  <span className="mc-pill bg-white/10 text-[#A5D8FF]">
+                    {preset.comm_condition}
+                  </span>
+                </div>
+                <div className="text-[#E5E5E4] tabular-nums">
+                  {preset.distance_million_km}M km · {preset.one_way_delay_minutes} min one-way ({(
+                    preset.one_way_delay_minutes * 2
+                  ).toFixed(1)}{' '}
+                  min RT)
+                </div>
+                <p className="text-[11px] text-[#8E95A8] mt-1 line-clamp-2">{preset.explanation}</p>
+              </button>
+            );
+          })}
+        </div>
+
+        {/* Custom Delay & Condition Controls */}
+        <div className="pt-4 border-t border-[#222638] grid grid-cols-1 md:grid-cols-4 gap-4 items-end text-xs">
+          <div>
+            <label className="block text-[#E5E5E4] mb-1">
+              One-Way Signal Delay: <strong>{customDelayMin} min</strong> (Round-Trip:{' '}
+              <strong>{(Number(customDelayMin) * 2).toFixed(1)} min</strong>)
+            </label>
+            <input
+              type="range"
+              min="0"
+              max="24"
+              step="0.2"
+              value={customDelayMin}
+              onChange={(e) => setCustomDelayMin(Number(e.target.value))}
+              className="w-full"
+            />
+          </div>
+          <div>
+            <label className="block text-[#E5E5E4] mb-1">Distance from Earth (Million km)</label>
+            <input
+              type="number"
+              step="0.5"
+              min="0"
+              value={customDistanceMkm}
+              onChange={(e) => setCustomDistanceMkm(Number(e.target.value))}
+              className="w-full rounded-lg bg-[#0B0D1A] border border-[#222638] px-3 py-1.5 text-[#FAF9FA]"
+            />
+          </div>
+          <div className="md:col-span-2 flex flex-wrap items-center gap-2">
+            {(['NORMAL', 'DELAYED', 'INTERMITTENT', 'BLACKOUT'] as const).map((cond) => (
+              <button
+                key={cond}
+                type="button"
+                disabled={busy}
+                onClick={() => applyCustomSimulator(cond)}
+                className={`px-3 py-2 rounded-lg font-medium ${
+                  commCondition === cond
+                    ? 'bg-[#EEF0F6] text-[#040404]'
+                    : 'bg-[#0B0D1A] text-[#E5E5E4] hover:bg-white/[0.08]'
+                }`}
+              >
+                Apply {cond}
+              </button>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      {/* PART 2.11: COMMUNICATION MESSAGE CENTRE */}
+      <section className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        {/* Compose Message / Health Report to Mission Control */}
+        <div className="mc-card p-6 space-y-4">
+          <div>
+            <h2 className="text-lg font-semibold text-[#FAF9FA]">
+              Compose Message to Mission Control
+            </h2>
+            <p className="text-xs text-[#8E95A8] mt-0.5">
+              Prepare health reports, supply updates, or crew communications. Never marked as Sent until transmission is confirmed.
+            </p>
+          </div>
+          <form onSubmit={handleComposeMessage} className="space-y-3 text-xs">
+            <div className="grid grid-cols-2 gap-2">
+              <div>
+                <label className="block text-[#E5E5E4] mb-1">Message Type</label>
+                <select
+                  value={msgForm.message_type}
+                  onChange={(e) => setMsgForm({ ...msgForm, message_type: e.target.value })}
+                  className="w-full rounded-lg bg-[#0B0D1A] border border-[#222638] px-3 py-1.5 text-[#FAF9FA]"
+                >
+                  <option value="MISSION_CONTROL_MESSAGE">Mission Control Message</option>
+                  <option value="HEALTH_REPORT">Crew Health Report</option>
+                  <option value="SUPPLY_REPORT">Food &amp; Supply Report</option>
+                  <option value="URGENT_MEDICAL_CONSULT">Urgent Flight Surgeon Consult</option>
+                </select>
+              </div>
+              <div>
+                <label className="block text-[#E5E5E4] mb-1">Priority</label>
+                <select
+                  value={msgForm.priority}
+                  onChange={(e) => setMsgForm({ ...msgForm, priority: e.target.value })}
+                  className="w-full rounded-lg bg-[#0B0D1A] border border-[#222638] px-3 py-1.5 text-[#FAF9FA]"
+                >
+                  <option value="NORMAL">Normal</option>
+                  <option value="IMPORTANT">Important</option>
+                  <option value="URGENT">Urgent</option>
+                </select>
               </div>
             </div>
-            <div className="rounded-xl bg-[#0B0D1A] p-3.5">
-              <div className="text-xs text-[#E5E5E4]/70">Queued Packets</div>
-              <div className="text-xl font-bold text-[#FAF9FA] tabular-data mt-1">{pendingCount}</div>
+
+            <div>
+              <label className="block text-[#E5E5E4] mb-1">Recipient Desk</label>
+              <input
+                type="text"
+                value={msgForm.recipient}
+                onChange={(e) => setMsgForm({ ...msgForm, recipient: e.target.value })}
+                className="w-full rounded-lg bg-[#0B0D1A] border border-[#222638] px-3 py-1.5 text-[#FAF9FA]"
+              />
             </div>
-          </div>
-          <p className="text-xs text-[#E5E5E4]/75">
-            Last Earth sync: {formatRecordedTime(state.comm_state.last_sync_timestamp)}.{' '}
-            {state.comm_state.dsn_note}
-          </p>
-          <div className="flex flex-wrap gap-3">
+
+            <div>
+              <label className="block text-[#E5E5E4] mb-1">Subject *</label>
+              <input
+                type="text"
+                required
+                value={msgForm.subject}
+                onChange={(e) => setMsgForm({ ...msgForm, subject: e.target.value })}
+                placeholder={`Sol ${state.latest_telemetry.mission_day} Status & Telemetry Summary`}
+                className="w-full rounded-lg bg-[#0B0D1A] border border-[#222638] px-3 py-1.5 text-[#FAF9FA]"
+              />
+            </div>
+
+            <div>
+              <label className="block text-[#E5E5E4] mb-1">Message / Report Content *</label>
+              <textarea
+                rows={4}
+                required
+                value={msgForm.body}
+                onChange={(e) => setMsgForm({ ...msgForm, body: e.target.value })}
+                placeholder="Enter telemetry summary, medical questions, or supply status for Earth..."
+                className="w-full rounded-lg bg-[#0B0D1A] border border-[#222638] px-3 py-1.5 text-[#FAF9FA]"
+              />
+            </div>
+
+            <div className="space-y-1.5 pt-1">
+              <label className="flex items-center gap-2 text-[#E5E5E4]">
+                <input
+                  type="checkbox"
+                  checked={msgForm.save_as_draft}
+                  onChange={(e) => setMsgForm({ ...msgForm, save_as_draft: e.target.checked })}
+                />
+                Save as Draft (do not queue yet)
+              </label>
+              <label className="flex items-center gap-2 text-[#8E95A8]">
+                <input
+                  type="checkbox"
+                  checked={msgForm.simulate_failure}
+                  onChange={(e) =>
+                    setMsgForm({ ...msgForm, simulate_failure: e.target.checked })
+                  }
+                />
+                Simulate intermittent carrier drop (test Failed &rarr; Retry workflow)
+              </label>
+            </div>
+
+            <button type="submit" disabled={busy} className="mc-btn-primary w-full py-2.5 flex items-center justify-center gap-1.5">
+              <Send className="w-3.5 h-3.5" />
+              {msgForm.save_as_draft ? 'Save Message Draft' : 'Queue / Transmit Message'}
+            </button>
+          </form>
+        </div>
+
+        {/* Message Queue & Transmission Log */}
+        <div className="lg:col-span-2 mc-card p-6 space-y-4">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <h2 className="text-lg font-semibold text-[#FAF9FA]">
+                Communication Message Centre ({commCentre?.messages?.length || 0})
+              </h2>
+              <p className="text-xs text-[#8E95A8]">
+                Statuses: Draft · Queued · Waiting for Connection · Sending · Sent · Failed
+              </p>
+            </div>
             <button
               type="button"
               disabled={busy || currentMode === 'OFFLINE'}
               onClick={syncQueue}
-              className="mc-btn-primary px-5 py-2.5 text-sm inline-flex items-center gap-2 disabled:opacity-50"
+              className="mc-btn-primary px-4 py-2 text-xs inline-flex items-center gap-1.5 disabled:opacity-50"
             >
-              <RefreshCw className="w-4 h-4" />
-              <span>
-                {currentMode === 'OFFLINE' ? 'Sync Paused While Offline' : 'Synchronize Queued Packets'}
-              </span>
+              <RefreshCw className="w-3.5 h-3.5" />
+              {currentMode === 'OFFLINE'
+                ? 'Sync Paused Offline'
+                : 'Synchronize All Queued Messages & Reports'}
             </button>
+          </div>
+
+          <div className="divide-y divide-[#222638] max-h-[420px] overflow-y-auto pr-1 text-xs">
+            {(commCentre?.messages || []).map((msg) => (
+              <div key={msg.message_uid} className="py-3.5 first:pt-0 last:pb-0 space-y-1.5">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="font-semibold text-[#FAF9FA] text-sm">{msg.subject}</span>
+                    <span
+                      className={`mc-pill ${
+                        msg.priority === 'URGENT'
+                          ? 'bg-rose-500/20 text-rose-300 border border-rose-500/40'
+                          : msg.priority === 'IMPORTANT'
+                          ? 'bg-amber-500/15 text-amber-300 border border-amber-500/30'
+                          : 'bg-white/5 text-[#8E95A8]'
+                      }`}
+                    >
+                      {msg.priority}
+                    </span>
+                    <span className="mc-pill bg-white/5 text-[#E5E5E4]">{msg.message_type}</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    {msgStatusBadge(msg.status)}
+                    {msg.status !== 'Sent' && (
+                      <button
+                        type="button"
+                        disabled={busy}
+                        onClick={() => handleRetryOrSendMessage(msg.message_uid, false)}
+                        className="px-2.5 py-1 rounded bg-[#A5D8FF]/20 hover:bg-[#A5D8FF]/30 text-[#A5D8FF] font-medium flex items-center gap-1"
+                      >
+                        <RotateCcw className="w-3 h-3" />
+                        {msg.status === 'Failed' ? 'Retry' : 'Send Now'}
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      disabled={busy}
+                      onClick={() => handleDeleteMessage(msg.message_uid)}
+                      className="p-1 rounded bg-white/5 hover:bg-rose-500/20 text-[#8E95A8] hover:text-rose-300"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                </div>
+
+                <p className="text-[#E5E5E4] leading-relaxed">{msg.body}</p>
+
+                {msg.failure_reason && (
+                  <p className="text-rose-300 text-[11px]">
+                    Transmission note: {msg.failure_reason} (Retries: {msg.retry_count})
+                  </p>
+                )}
+
+                <div className="flex flex-wrap items-center justify-between text-[11px] text-[#8E95A8]">
+                  <span>
+                    To: {msg.recipient} · Latency: {msg.one_way_delay_minutes}m OW /{' '}
+                    {msg.round_trip_delay_minutes}m RT ({msg.distance_million_km}M km)
+                  </span>
+                  <span>
+                    Created: {formatRecordedTime(msg.created_at)}
+                    {msg.sent_at ? ` · Sent: ${formatRecordedTime(msg.sent_at)}` : ''}
+                  </span>
+                </div>
+              </div>
+            ))}
+          </div>
+
+          {/* Synchronisation History Log */}
+          {(commCentre?.sync_history?.length || 0) > 0 && (
+            <div className="pt-4 border-t border-[#222638]">
+              <h3 className="text-xs font-semibold text-[#FAF9FA] mb-2">
+                Recent Synchronisation &amp; DSN Pass Log
+              </h3>
+              <div className="space-y-1.5 text-[11px]">
+                {(commCentre?.sync_history || []).slice(0, 4).map((sh) => (
+                  <div
+                    key={sh.sync_uid}
+                    className="flex flex-wrap items-center justify-between gap-2 p-2 rounded-lg bg-[#0B0D1A]"
+                  >
+                    <span className="text-[#E5E5E4]">
+                      <strong>Sol {sh.mission_day}</strong> ({sh.status}): {sh.summary}
+                    </span>
+                    <span className="text-[#8E95A8]">{formatRecordedTime(sh.timestamp)}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      </section>
+
+      {/* PART 2.10: LOCAL OFFLINE VS EARTH-DEPENDENT CAPABILITIES */}
+      <section className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+        <div className="mc-card p-5 lg:p-6 space-y-3">
+          <h2 className="text-base font-semibold text-[#FAF9FA] flex items-center gap-2">
+            <CheckCircle2 className="w-4 h-4 text-emerald-400" />
+            Available 100% Locally Offline (Zero Earth Dependency)
+          </h2>
+          <ul className="space-y-1.5 text-xs text-[#E5E5E4]">
+            {(
+              commCentre?.local_vs_earth_capabilities?.available_locally_offline || [
+                '5-Hazard Integrated Health Assessment & EVA Readiness',
+                'Food & Life-Support Supplies Inventory & Nutrition Tracking',
+                'Private Personal Journal & TARSCARE AI Companion',
+              ]
+            ).map((item) => (
+              <li key={item} className="flex items-center gap-2">
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 shrink-0" />
+                <span>{item}</span>
+              </li>
+            ))}
+          </ul>
+          <div className="pt-2">
             <button
               type="button"
               onClick={onOpenEmergency}
-              className="mc-btn-secondary px-5 py-2.5 text-sm inline-flex items-center gap-2"
+              className="mc-btn-secondary px-4 py-2 text-xs inline-flex items-center gap-2"
             >
               <ShieldAlert className="w-4 h-4 text-amber-300" />
               <span>Run Offline Emergency Protocol</span>
@@ -952,7 +1512,7 @@ export const CommunicationStatusView: React.FC<CommProps> = ({
                     setAiNotice(
                       nextEnabled
                         ? 'Local Ollama LLM synthesis enabled.'
-                        : 'Switched to deterministic offline RAG synthesis.',
+                        : 'Switched to deterministic offline RAG synthesis.'
                     );
                   } catch (err) {
                     setAiNotice(err instanceof Error ? err.message : 'Failed to toggle AI mode.');

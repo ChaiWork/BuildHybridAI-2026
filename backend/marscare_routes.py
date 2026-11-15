@@ -394,16 +394,22 @@ def api_set_comm_mode(req: CommModeChangeRequest) -> Dict[str, Any]:
     comm_state = database.fetch_system_state("comm_state") or {}
     if mode == "CONNECTED":
         comm_state["earth_comm_status"] = "NOMINAL_DIRECT"
+        comm_state["comm_condition"] = "NORMAL"
         comm_state["offline_mode_forced"] = False
         comm_state["one_way_delay_minutes"] = 0.0
+        comm_state["round_trip_delay_minutes"] = 0.0
     elif mode == "OFFLINE":
         comm_state["earth_comm_status"] = "CONJUNCTION_BLACKOUT"
+        comm_state["comm_condition"] = "BLACKOUT"
         comm_state["offline_mode_forced"] = True
         comm_state["one_way_delay_minutes"] = req.one_way_delay_minutes or 22.0
+        comm_state["round_trip_delay_minutes"] = round(float(comm_state["one_way_delay_minutes"]) * 2.0, 2)
     else:
         comm_state["earth_comm_status"] = "NOMINAL_DELAYED"
+        comm_state["comm_condition"] = "DELAYED"
         comm_state["offline_mode_forced"] = False
         comm_state["one_way_delay_minutes"] = req.one_way_delay_minutes if req.one_way_delay_minutes is not None else 14.2
+        comm_state["round_trip_delay_minutes"] = round(float(comm_state["one_way_delay_minutes"]) * 2.0, 2)
     database.update_system_state("comm_state", comm_state)
     return {
         "comm_state": comm_state,

@@ -46,6 +46,13 @@ from donki_client import build_donki_public_state, trigger_background_auto_sync
 from donki_routes import donki_router, register_donki_state_builder
 from insight_client import build_insight_public_state, trigger_background_insight_auto_sync
 from insight_routes import insight_router, register_insight_state_builder
+from support_modules import (
+    build_comm_centre_state,
+    build_companion_and_journal_state,
+    build_food_and_supplies_state,
+    synchronize_all_communications,
+)
+from support_routes import register_support_state_builder, support_router
 from database import (
     init_db,
     get_active_crew_id,
@@ -215,6 +222,58 @@ def _build_full_state() -> Dict[str, Any]:
     pins = fetch_system_state("crew_privacy_pins") or {}
     pin_hint = (pins.get(active_crew_id) or {}).get("hint", "Default demo PIN: 2026")
 
+    food_state = build_food_and_supplies_state(active_crew_id)
+    comm_centre_state = build_comm_centre_state()
+    companion_state = build_companion_and_journal_state(active_crew_id)
+
+    comm_state["round_trip_delay_minutes"] = comm_centre_state["round_trip_delay_minutes"]
+    comm_state["comm_condition"] = comm_centre_state["comm_condition"]
+    comm_state["mission_location"] = comm_centre_state["mission_location"]
+    comm_state["mission_destination"] = comm_centre_state["mission_destination"]
+    comm_state["pending_messages_count"] = comm_centre_state["pending_messages_count"]
+
+    assessment["food_alerts"] = food_state.get("food_alerts", [])
+    assessment["nutrition_overview"] = food_state.get("nutrition_overview", {})
+    assessment["five_hazard_support_integration"] = {
+        "Isolation and Confinement": {
+            "connected_modules": ["Personal Journal", "TARSCARE AI Companion", "Self-Reported Mood Tracker"],
+            "summary": (
+                f"{len(companion_state.get('journal_entries', []))} private journal entries and "
+                f"{len(companion_state.get('mood_checkins', []))} self-reported mood check-ins stored locally."
+            ),
+        },
+        "Distance from Earth": {
+            "connected_modules": ["Distance from Earth Dashboard", "Communication Delay Simulator", "Store-and-Forward Message Centre", "Food & Supplies Estimator"],
+            "summary": (
+                f"{comm_centre_state['distance_million_km']}M km from Earth "
+                f"({comm_centre_state['one_way_delay_minutes']} min one-way / {comm_centre_state['round_trip_delay_minutes']} min round-trip; "
+                f"{comm_centre_state['comm_condition']}). Primary meal projection: {food_state['primary_meal_projection']['estimated_remaining_days']} Sols."
+            ),
+        },
+        "Hostile and Closed Environments": {
+            "connected_modules": ["Food & Water Storage", "Shelf-Life & Expiry Safety", "ECLSS Potable Water Loop"],
+            "summary": (
+                f"Potable water reserve at {food_state['summary']['potable_water_liters']} L "
+                f"(~{food_state['summary']['estimated_water_supply_days']} Sols); "
+                f"{food_state['summary']['expiring_soon_count']} item(s) approaching expiry."
+            ),
+        },
+        "Gravity Fields": {
+            "connected_modules": ["Per-Astronaut Nutrition Targets", "Protein/Calcium/Vitamin D & Hydration Tracking", "ARED Countermeasure Alignment"],
+            "summary": (
+                f"Sol {food_state['mission_config']['current_mission_sol']} intake: "
+                f"{food_state['nutrition_overview']['recorded']['calories_kcal']:.0f}/{food_state['nutrition_overview']['targets']['calories_target_kcal']:.0f} kcal, "
+                f"Protein {food_state['nutrition_overview']['recorded']['protein_g']:.1f}/{food_state['nutrition_overview']['targets']['protein_target_g']:.0f}g."
+            ),
+        },
+        "Space Radiation": {
+            "connected_modules": ["Storm-Shelter Emergency Ration Reserve", "Antioxidant & Micronutrient Tracking", "Autonomous Offline Operations"],
+            "summary": (
+                "Storm-shelter high-density emergency rations and water-wall bladder reserves tracked continuously alongside radiation dosimetry."
+            ),
+        },
+    }
+
     return {
         "active_crew_id": active_crew_id,
         "astronaut": baseline.model_dump(),
@@ -238,6 +297,9 @@ def _build_full_state() -> Dict[str, Any]:
         "biosample_records": fetch_biosample_records(crew_id=active_crew_id, limit=50),
         "donki_state": build_donki_public_state(limit=250),
         "insight_state": build_insight_public_state(limit=14),
+        "food_state": food_state,
+        "comm_centre_state": comm_centre_state,
+        "companion_state": companion_state,
         "knowledge_corpus": [asdict(doc) for doc in KNOWLEDGE_CORPUS],
         "local_ai_status": get_local_ai_status(),
     }
@@ -254,6 +316,8 @@ register_donki_state_builder(_build_full_state)
 app.include_router(donki_router)
 register_insight_state_builder(_build_full_state)
 app.include_router(insight_router)
+register_support_state_builder(_build_full_state)
+app.include_router(support_router)
 
 
 @app.get("/api/health")
@@ -622,10 +686,19 @@ def submit_psych_questionnaire(payload: PsychQuestionnaireInput) -> Dict[str, An
 
 @app.post("/api/comm/status")
 def update_comm_status(payload: CommStatusUpdate) -> Dict[str, Any]:
-    comm_state = fetch_system_state("comm_state")
+    comm_state = fetch_system_state("comm_state") or {}
     comm_state["earth_comm_status"] = payload.earth_comm_status
     comm_state["one_way_delay_minutes"] = payload.one_way_delay_minutes
+    comm_state["round_trip_delay_minutes"] = round(float(payload.one_way_delay_minutes) * 2.0, 2)
     comm_state["offline_mode_forced"] = payload.offline_mode_forced
+    if payload.offline_mode_forced or "BLACKOUT" in payload.earth_comm_status.upper():
+        comm_state["comm_condition"] = "BLACKOUT"
+    elif "DEGRADED" in payload.earth_comm_status.upper():
+        comm_state["comm_condition"] = "INTERMITTENT"
+    elif float(payload.one_way_delay_minutes) <= 0.1:
+        comm_state["comm_condition"] = "NORMAL"
+    else:
+        comm_state["comm_condition"] = "DELAYED"
     update_system_state("comm_state", comm_state)
     return _build_full_state()
 
@@ -648,8 +721,8 @@ def queue_health_report(payload: StoreForwardReportCreate) -> Dict[str, Any]:
 
 
 @app.post("/api/comm/sync")
-def sync_reports_to_earth() -> Dict[str, Any]:
-    sync_result = synchronize_queued_reports()
+def sync_reports_to_earth(simulate_intermittent_drop: bool = False) -> Dict[str, Any]:
+    sync_result = synchronize_all_communications(simulate_intermittent_drop=simulate_intermittent_drop)
     state = _build_full_state()
     return {"sync_result": sync_result, "state": state}
 
