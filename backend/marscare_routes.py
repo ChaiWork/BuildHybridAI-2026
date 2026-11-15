@@ -1,6 +1,6 @@
 """
 MarsCare AI Extended Routes & Hybrid RAG Initializer.
-Preserves all existing TARSCARE AI endpoints while adding MarsCare UI-facing routes:
+Preserves all existing TARS Care AI endpoints while adding MarsCare UI-facing routes:
 - /api/ai/status: Local Ollama + Sentence-Transformers + deterministic offline RAG status
 - /api/assessment/evaluate: Combined manual measurement + categorized symptom submission
 - /api/history: Windowed (7/14/30d) historical logs & alerts filter
@@ -40,7 +40,7 @@ _CORPUS_EXTENDED = False
 
 
 def initialize_marscare_rag() -> None:
-    """Extends TARSCARE AI's local RAG corpus with RadLab, OSDR, NLSP, EDA, TBone & Vascular docs and attaches hybrid AI hooks."""
+    """Extends TARS Care AI's local RAG corpus with RadLab, OSDR, NLSP, EDA, TBone & Vascular docs and attaches hybrid AI hooks."""
     global _CORPUS_EXTENDED
     if _CORPUS_EXTENDED:
         return
@@ -111,7 +111,7 @@ def initialize_marscare_rag() -> None:
     def _enrich_context_if_sparse(ctx: Optional[Dict[str, Any]]) -> Dict[str, Any]:
         enriched = dict(ctx or {})
         history = database.fetch_all_telemetry()
-        baseline_raw = database.fetch_system_state("baseline") or {}
+        baseline_raw = database.fetch_crew_baseline() or {}
         if history:
             latest = history[-1]
             if "latest_telemetry" not in enriched:
@@ -201,19 +201,19 @@ def initialize_marscare_rag() -> None:
                     {
                         "doc_id": "TARSCARE-SPEC-01",
                         "title": "Out-of-Scope Invasive / Surgical Procedure Limitation",
-                        "agency": "TARSCARE Operational Layer",
+                        "agency": "TARS Care Operational Layer",
                         "year": "2026",
-                        "excerpt": "TARSCARE is not a surgical manual or clinical intervention guide; escalate acute abdominal/surgical emergencies to the Crew Medical Officer and Flight Surgeons.",
+                        "excerpt": "TARS Care is not a surgical manual or clinical intervention guide; escalate acute abdominal/surgical emergencies to the Crew Medical Officer and Flight Surgeons.",
                         "provenance": "SYSTEM_OPERATIONAL_SPEC",
                     }
                 ],
                 "answer": (
-                    "Insufficient evidence and out-of-scope clinical procedure request: TARSCARE does not contain "
+                    "Insufficient evidence and out-of-scope clinical procedure request: TARS Care does not contain "
                     "surgical manuals, operative protocols, or invasive clinical instructions (such as abdominal or laparoscopic surgery). "
                     "Contact your onboard Crew Medical Officer immediately and consult NASA Medical Operations / Earth Flight Surgeons."
                 ),
                 "safety_notice": (
-                    "Capability boundary: TARSCARE is limited to indexed NASA/CSA spaceflight research and baseline triage, not surgical or acute operative care."
+                    "Capability boundary: TARS Care is limited to indexed NASA/CSA spaceflight research and baseline triage, not surgical or acute operative care."
                 ),
                 "citations": citations[:3],
             }
@@ -235,14 +235,14 @@ def initialize_marscare_rag() -> None:
                     {
                         "doc_id": "TARSCARE-SPEC-01",
                         "title": "Medication & Clinical Prescribing Prohibition",
-                        "agency": "TARSCARE Operational Layer",
+                        "agency": "TARS Care Operational Layer",
                         "year": "2026",
-                        "excerpt": "TARSCARE never recommends drug dosages or prescriptions; refer to onboard CMO Medical Operations Kit and Earth Flight Surgeons.",
+                        "excerpt": "TARS Care never recommends drug dosages or prescriptions; refer to onboard CMO Medical Operations Kit and Earth Flight Surgeons.",
                         "provenance": "SYSTEM_OPERATIONAL_SPEC",
                     }
                 ],
                 "answer": (
-                    "Insufficient evidence and out-of-scope clinical request: TARSCARE is an autonomous "
+                    "Insufficient evidence and out-of-scope clinical request: TARS Care is an autonomous "
                     "educational and health-monitoring companion built on NASA/CSA spaceflight research references. "
                     "It cannot prescribe medications, recommend drug dosages, or replace onboard Crew Medical Officer "
                     "protocols or Flight Surgeon guidance."
@@ -447,17 +447,20 @@ def api_filtered_history(days: int = 30) -> Dict[str, Any]:
 def api_generate_report(req: ReportGenerateRequest) -> Dict[str, Any]:
     history = database.fetch_all_telemetry()
     latest = history[-1]
-    baseline = AstronautBaseline(**(database.fetch_system_state("baseline") or {}))
+    baseline = AstronautBaseline(**(database.fetch_crew_baseline() or {}))
     rad_limits = RadiationConfigLimits(**(database.fetch_system_state("rad_limits") or {}))
     env_limits = EnvironmentalConfigLimits(**(database.fetch_system_state("env_limits") or {}))
     comm_state = database.fetch_system_state("comm_state") or {}
     psych_list = database.fetch_psych_questionnaires()
+    sans_list = database.fetch_sans_assessments()
     assessment = evaluate_integrated_health(
-        latest, history, baseline, rad_limits, env_limits, comm_state, latest_psych=psych_list[0] if psych_list else None
+        latest, history, baseline, rad_limits, env_limits, comm_state,
+        latest_psych=psych_list[0] if psych_list else None,
+        latest_sans=sans_list[0] if sans_list else None,
     )
     comm_norm = normalize_comm_mode(comm_state)
     is_direct = comm_norm["mode"] == "CONNECTED"
-    title = req.title or f"Sol {latest['mission_day']} TARSCARE Autonomous Health Summary"
+    title = req.title or f"Sol {latest['mission_day']} TARS Care Autonomous Health Summary"
     summary = (
         f"Overall: {assessment['overall_status']} | HR {latest['heart_rate_bpm']:.0f} BPM, "
         f"BP {latest['systolic_bp_mmhg']:.0f}/{latest['diastolic_bp_mmhg']:.0f} mmHg, "
@@ -596,11 +599,12 @@ def api_submit_combined_assessment(req: CombinedAssessmentRequest) -> Dict[str, 
 
     inserted = database.insert_telemetry_record(sub.model_dump())
     updated_history = database.fetch_all_telemetry()
-    baseline = AstronautBaseline(**(database.fetch_system_state("baseline") or {}))
+    baseline = AstronautBaseline(**(database.fetch_crew_baseline() or {}))
     rad_limits = RadiationConfigLimits(**(database.fetch_system_state("rad_limits") or {}))
     env_limits = EnvironmentalConfigLimits(**(database.fetch_system_state("env_limits") or {}))
     comm_state = database.fetch_system_state("comm_state") or {}
     psych_list = database.fetch_psych_questionnaires()
+    sans_list = database.fetch_sans_assessments()
     assessment = evaluate_integrated_health(
         inserted,
         updated_history,
@@ -609,6 +613,7 @@ def api_submit_combined_assessment(req: CombinedAssessmentRequest) -> Dict[str, 
         env_limits,
         comm_state,
         latest_psych=psych_list[0] if psych_list else None,
+        latest_sans=sans_list[0] if sans_list else None,
     )
 
     if assessment["overall_status"] in ("WARNING", "CRITICAL"):

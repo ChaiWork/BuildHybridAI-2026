@@ -11,15 +11,19 @@ import {
 } from 'recharts';
 import {
   Activity,
+  Eye,
   MessageSquare,
   Radiation,
   Radio,
   Settings2,
+  TrendingUp,
   Users,
   Wind,
 } from 'lucide-react';
 import { FullSystemState } from '../types';
 import { apiRequest, gravityRegimeLabel, statusMeta } from './uiHelpers';
+import { DonkiSpaceWeatherPanel } from './DonkiSpaceWeatherPanel';
+import { InsightWeatherPanel } from './InsightWeatherPanel';
 
 interface SpaceflightHazardsViewProps {
   state: FullSystemState;
@@ -27,6 +31,7 @@ interface SpaceflightHazardsViewProps {
   onSelectHazard: (id: string) => void;
   onStateUpdated: (next: FullSystemState) => void;
   onAskAssistant: (prompt: string) => void;
+  onOpenSansModal?: () => void;
 }
 
 const HAZARD_META = [
@@ -61,6 +66,7 @@ export const SpaceflightHazardsView: React.FC<SpaceflightHazardsViewProps> = ({
   onSelectHazard,
   onStateUpdated,
   onAskAssistant,
+  onOpenSansModal,
 }) => {
   const modules = state.assessment.hazard_modules_4step || [];
   const activeMod = modules.find((m) => m.id === activeHazardId) || modules[0];
@@ -303,6 +309,24 @@ export const SpaceflightHazardsView: React.FC<SpaceflightHazardsViewProps> = ({
                   ? 'EXERCISE HOLD ACTIVE: Suspend physical countermeasures until cardiopulmonary & critical triage flags resolve.'
                   : GRAVITY_GUIDE[gravityExplorer].focus}
               </p>
+              {onOpenSansModal && (
+                <div className="pt-2 border-t border-white/[0.07] flex flex-wrap items-center justify-between gap-2">
+                  <span className="text-xs text-[#E5E5E4]/80">
+                    SANS Vision:{' '}
+                    {state.assessment.latest_sans
+                      ? `Sol ${state.assessment.latest_sans.mission_day} (${state.assessment.latest_sans.wavy_lines_detected || state.assessment.latest_sans.scotoma_cells.length > 0 || state.assessment.latest_sans.near_acuity_shift ? 'Distortion / shift flagged' : 'Clear grid'})`
+                      : 'No Amsler check recorded'}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={onOpenSansModal}
+                    className="mc-btn-secondary px-3 py-1.5 text-xs inline-flex items-center gap-1.5"
+                  >
+                    <Eye className="w-3.5 h-3.5 text-[#A5D8FF]" />
+                    <span>Run SANS Amsler Check</span>
+                  </button>
+                </div>
+              )}
             </div>
           )}
         </div>
@@ -359,6 +383,24 @@ export const SpaceflightHazardsView: React.FC<SpaceflightHazardsViewProps> = ({
               </AreaChart>
             </ResponsiveContainer>
           </div>
+
+          {state.assessment.predictive_runways && activeMod.id !== 'distance' && (
+            <div className="rounded-xl bg-[#0B0D1A] border border-[#A5D8FF]/20 p-3 space-y-1">
+              <div className="text-xs font-semibold text-[#A5D8FF] inline-flex items-center gap-1.5">
+                <TrendingUp className="w-3.5 h-3.5" />
+                <span>Deterministic Predictive Runway</span>
+              </div>
+              <p className="text-xs text-[#E5E5E4]/90 leading-relaxed">
+                {activeMod.id === 'radiation'
+                  ? state.assessment.predictive_runways.radiation_budget.summary
+                  : activeMod.id === 'isolation'
+                    ? state.assessment.predictive_runways.sleep_debt.summary
+                    : activeMod.id === 'gravity'
+                      ? state.assessment.predictive_runways.musculoskeletal.summary
+                      : state.assessment.predictive_runways.co2.summary}
+              </p>
+            </div>
+          )}
         </div>
 
         {/* Section 3: Why does it matter in space? */}
@@ -369,7 +411,7 @@ export const SpaceflightHazardsView: React.FC<SpaceflightHazardsViewProps> = ({
             {activeMod.id === 'radiation'
               ? 'Distinction notice: Absorbed dose (Gy) is distinct from equivalent/effective dose (Sv). The NASA Radiation Data Portal (ARMAS) represents Earth atmosphere flights, not Mars surface exposure.'
               : activeMod.id === 'isolation'
-                  ? 'Clinical safeguard: TARSCARE tracks mood, stress, and sleep recovery trends without diagnosing depression, anxiety, or psychiatric conditions.'
+                  ? 'Clinical safeguard: TARS Care tracks mood, stress, and sleep recovery trends without diagnosing depression, anxiety, or psychiatric conditions.'
                   : activeMod.id === 'environment'
                     ? 'Clinical safeguard: Correlates respiratory dryness or headaches with cabin CO₂/humidity and NASA OSDR/EDA guidance without auto-diagnosing infection.'
                     : 'Scientific alignment: Grounded in NASA Human Research Program (HRP) and Canadian Space Agency (CSA) studies (CCISS, CARDIOBREATH, C-STARS, TBone, Vascular).'}
@@ -435,6 +477,13 @@ export const SpaceflightHazardsView: React.FC<SpaceflightHazardsViewProps> = ({
           )}
         </div>
       </section>
+
+      {activeMod.id === 'radiation' && (
+        <DonkiSpaceWeatherPanel state={state} onStateUpdated={onStateUpdated} />
+      )}
+      {activeMod.id === 'environment' && (
+        <InsightWeatherPanel state={state} onStateUpdated={onStateUpdated} />
+      )}
     </div>
   );
 };

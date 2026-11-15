@@ -83,7 +83,7 @@ KNOWLEDGE_CORPUS: List[KnowledgeDoc] = [
             "high-altitude balloons, and suborbital platforms. IMPORTANT SCIENTIFIC LIMITATION: ARMAS "
             "measurements characterize Earth's high-altitude aviation and upper-atmospheric radiation "
             "environment and must NOT be represented as direct in-situ measurements of the interplanetary "
-            "Mars transit or Martian surface radiation environment. In TARSCARE AI, ARMAS/RDP methodology "
+            "Mars transit or Martian surface radiation environment. In TARS Care AI, ARMAS/RDP methodology "
             "informs how dosimetric time-series (absorbed dose rate vs. equivalent dose rate, timestamped "
             "event spikes, and instrument provenance metadata) are structured and validated, while Mars "
             "transit and surface telemetry are explicitly flagged as synthetic demonstration data."
@@ -224,6 +224,73 @@ KNOWLEDGE_CORPUS: List[KnowledgeDoc] = [
             "orthostatic presyncope, fever with respiratory compromise, or life-support atmospheric hazard "
             "requiring immediate execution of onboard Crew Medical Officer emergency checklist without "
             "waiting for Earth round-trip telemetry)."
+        ),
+    ),
+    KnowledgeDoc(
+        doc_id="CSA-BIOMONITOR-01",
+        title="CSA Bio-Monitor Smart Shirt, CARDIOBREATH & AstroFit Countermeasure Hardware",
+        agency="Canadian Space Agency (CSA)",
+        year="2025",
+        url="https://www.asc-csa.gc.ca/eng/sciences/bio-monitor.asp",
+        hazard_category="Gravity Fields",
+        provenance="REAL_RESEARCH_REF",
+        content=(
+            "The CSA Bio-Monitor wearable system records continuous electrocardiogram (ECG), heart rate, "
+            "breathing rate, arterial blood pressure estimation, skin temperature, and physical activity. "
+            "Paired with CARDIOBREATH cardiorespiratory strain studies and the AstroFit cycle ergometer "
+            "protocols, crewmembers and flight surgeons track aerobic adaptation, orthostatic intolerance, "
+            "and countermeasure effectiveness across microgravity and partial gravity phases without relying "
+            "solely on Earth terrestrial normal values."
+        ),
+    ),
+    KnowledgeDoc(
+        doc_id="CSA-EVARM-RADIN2-01",
+        title="CSA EVARM MOSFET, Radi-N2 Neutron Bubble Detectors & CANS Radiation Spectrometry",
+        agency="Canadian Space Agency (CSA)",
+        year="2026",
+        url="https://www.asc-csa.gc.ca/eng/sciences/radi-n2.asp",
+        hazard_category="Space Radiation",
+        provenance="REAL_RESEARCH_REF",
+        content=(
+            "Spacecraft radiation instrumentation encompasses active MOSFET dosimeters (EVARM), "
+            "passive tissue-equivalent neutron bubble detectors (Radi-N2 and Automatic Bubble Readers), "
+            "and compact multi-particle spectrometers (CANS). Clinical health systems must never confuse "
+            "physical absorbed dose (Gray / mGy) with biologically weighted equivalent or effective dose "
+            "(Sievert / mSv), and Radi-N2 manual bubble detector logs remain discrete readings rather than "
+            "live continuous wearable telemetry streams."
+        ),
+    ),
+    KnowledgeDoc(
+        doc_id="NASA-ARCHER-SANS-01",
+        title="ARCHeR Actigraphy, Ocular Tonometry & Neuro-Ocular SANS Diagnostic Hardware",
+        agency="NASA HRP / CSA",
+        year="2025",
+        url="https://www.nasa.gov/reference/brain-fluid-pressure/",
+        hazard_category="Gravity Fields",
+        provenance="REAL_RESEARCH_REF",
+        content=(
+            "Sleep-wake rest-activity tracking via ARCHeR wrist actigraphy complements Spaceflight-Associated "
+            "Neuro-ocular Syndrome (SANS) monitoring using handheld ocular tonometry (IOP screening > 21 mmHg "
+            "or >= 4 mmHg inter-eye asymmetry flagged for review), Amsler grid distortion checks, vascular "
+            "ultrasound imaging logs, TBone HR-pQCT 3D skeletal density reports, and specialized ground/facility "
+            "MRI neurological records. Thigh cuffs represent a mechanical fluid-shift countermeasure rather than "
+            "a vital-signs sensor."
+        ),
+    ),
+    KnowledgeDoc(
+        doc_id="NASA-TEMPUS-BIOSAMPLE-01",
+        title="Tempus Pro Telemedicine Monitor, Saliva Blotting Booklets & Spaceflight Biosamples",
+        agency="NASA / CSA",
+        year="2025",
+        url="https://www.nasa.gov/reference/tempus-pro/",
+        hazard_category="Distance from Earth",
+        provenance="REAL_RESEARCH_REF",
+        content=(
+            "Integrated exploration medical architecture combines portable telemedicine monitors (Tempus Pro) "
+            "with filter-paper saliva blotting booklets, biological specimen kits for immune/stress biomarker "
+            "assays, and crew behavioural surveys and space gardening (Veggie) psychosocial countermeasures. "
+            "Biological specimen kits record collection metadata and cold stowage location separately from "
+            "laboratory assay imports and never fabricate real-time clinical vital signs."
         ),
     ),
 ]
@@ -428,7 +495,7 @@ class LocalRAGEngine:
 
         if any(k in ql for k in ("contradict", "conflict", "disagree", "inconsistent")):
             notes.append(
-                "Conflict-resolution protocol: When retrieved documents diverge, TARSCARE preserves both citations side-by-side without guessing a winner, follows the more conservative onboard safety posture, and defers final interpretation to the Crew Medical Officer and Earth Flight Surgeons."
+                "Conflict-resolution protocol: When retrieved documents diverge, TARS Care preserves both citations side-by-side without guessing a winner, follows the more conservative onboard safety posture, and defers final interpretation to the Crew Medical Officer and Earth Flight Surgeons."
             )
 
         return " ".join(notes) if notes else None
@@ -460,7 +527,7 @@ class LocalRAGEngine:
             {
                 "doc_id": "MISSION-BASELINE-POLICY",
                 "title": "Mission Prototype Guidance & CMO Escalation Boundary",
-                "agency": "TARSCARE Operational Layer",
+                "agency": "TARS Care Operational Layer",
                 "year": "2026",
                 "excerpt": (
                     "Compare live telemetry against the astronaut's personal baseline rather than unvalidated Earth norms; "
@@ -487,7 +554,7 @@ class LocalRAGEngine:
                 {
                     "doc_id": "TARSCARE-SPEC-01",
                     "title": "Out-of-Scope / Insufficient Evidence Protocol",
-                    "agency": "TARSCARE Operational Layer",
+                    "agency": "TARS Care Operational Layer",
                     "year": "2026",
                     "excerpt": "Refuse speculation, state the knowledge gap honestly, and escalate to the onboard Crew Medical Officer (CMO) or Flight Surgeon queue.",
                     "provenance": "SYSTEM_OPERATIONAL_SPEC",
@@ -496,7 +563,7 @@ class LocalRAGEngine:
             "answer": (
                 "Insufficient evidence in onboard knowledge base: The locally stored NASA/CSA scientific documents do not "
                 "contain direct verified information to answer this query safely. In accordance with mission medical safety "
-                "rules [TARSCARE-SPEC-01], TARSCARE refuses to speculate, diagnose conditions, prescribe medications/dosages, or "
+                "rules [TARSCARE-SPEC-01], TARS Care refuses to speculate, diagnose conditions, prescribe medications/dosages, or "
                 "fabricate citations. Please consult the onboard Crew Medical Officer (CMO) Medical Operations Kit checklist "
                 "or queue a Store-and-Forward inquiry for Earth Flight Surgeons."
             ),
@@ -534,7 +601,7 @@ class LocalRAGEngine:
 
         if "guarantee" in ql:
             lead_parts.append(
-                "Direct Answer: No — neither TARSCARE nor current NASA/CSA spaceflight countermeasures can guarantee that an astronaut will stay healthy on Mars. Deep-space radiation, partial/microgravity adaptation, ECLSS failures, and unexpected medical events carry irreducible biological risk."
+                "Direct Answer: No — neither TARS Care nor current NASA/CSA spaceflight countermeasures can guarantee that an astronaut will stay healthy on Mars. Deep-space radiation, partial/microgravity adaptation, ECLSS failures, and unexpected medical events carry irreducible biological risk."
             )
         if "armas" in ql and "mars" in ql:
             lead_parts.append(
@@ -564,7 +631,7 @@ class LocalRAGEngine:
             )
         if spec_lines:
             sections.append("Operational & Safety Specification:\n\n" + "\n\n".join(spec_lines))
-        if conflict_n   otice:
+        if conflict_notice:
             sections.append(f"Source & Regime Conflict Notice: {conflict_notice}")
 
         sections.append(

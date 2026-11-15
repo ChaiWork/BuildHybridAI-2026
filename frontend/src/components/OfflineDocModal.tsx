@@ -51,7 +51,7 @@ export const OfflineDocModal: React.FC<OfflineDocModalProps> = ({
                       : 'border-emerald-500/30 bg-emerald-500/10 text-emerald-300'
                   }`}
                 >
-                  {isSpec ? 'TARSCARE System Operational Spec' : 'Offline Scientific Reference'}
+                  {isSpec ? 'TARS Care System Operational Spec' : 'Offline Scientific Reference'}
                 </span>
               </div>
               <h3 id="offline-doc-title" className="mt-1 text-lg font-medium text-[#EEF0F6]">
@@ -72,7 +72,7 @@ export const OfflineDocModal: React.FC<OfflineDocModalProps> = ({
         <div className="space-y-4 p-6">
           <div className="flex items-center gap-2 rounded-xl border border-emerald-500/25 bg-emerald-500/10 px-3.5 py-2 text-xs text-emerald-200">
             <WifiOff className="h-4 w-4 shrink-0 text-emerald-300" />
-            Stored locally inside TARSCARE&apos;s onboard knowledge repository — readable 100% offline with zero Earth or internet connectivity.
+            Stored locally inside TARS Care&apos;s onboard knowledge repository — readable 100% offline with zero Earth or internet connectivity.
           </div>
 
           {highlightedExcerpt && (

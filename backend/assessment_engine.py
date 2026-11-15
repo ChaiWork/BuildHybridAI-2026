@@ -15,6 +15,11 @@ from models import (
     MissionPhase,
 )
 from knowledge_base import rag_engine
+from mission_ops import (
+    compute_eva_readiness,
+    compute_predictive_runways,
+    recommendation_sort_key,
+)
 
 
 def _pct_delta(current: float, baseline: float) -> float:
@@ -40,6 +45,7 @@ def evaluate_integrated_health(
     comm_state: Dict[str, Any],
     latest_psych: Optional[Dict[str, Any]] = None,
     skip_rag: bool = False,
+    latest_sans: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """
     Central assessment engine integrating all five hazard modules, personal baseline comparisons,
@@ -367,7 +373,7 @@ def evaluate_integrated_health(
         msg = (
             f"Earth telemetry link in {comm_mode} (One-way light time: {delay_min:.1f} min; "
             f"{pending_count} health reports queued in local store-and-forward buffer). "
-            "Onboard TARSCARE AI operating in 100% autonomous offline mode."
+            "Onboard TARS Care AI operating in 100% autonomous offline mode."
         )
         findings.append({
             "hazard": "Distance from Earth",
@@ -412,7 +418,16 @@ def evaluate_integrated_health(
     balance = float(latest["balance_score"])
     adherence = float(latest["exercise_adherence_pct"])
     ex_perf = float(latest.get("exercise_performance_pct", 100.0))
-    sans_vis = bool(latest.get("visual_disturbance_sans", False))
+    sans_abnormal_latest = bool(
+        latest_sans
+        and int(latest_sans.get("mission_day", 0)) >= int(latest.get("mission_day", 0))
+        and (
+            latest_sans.get("wavy_lines_detected")
+            or len(latest_sans.get("scotoma_cells") or []) > 0
+            or latest_sans.get("near_acuity_shift")
+        )
+    )
+    sans_vis = bool(latest.get("visual_disturbance_sans", False)) or sans_abnormal_latest
     phase = latest.get("mission_phase", MissionPhase.MARS_SURFACE.value)
     grav_g = float(latest.get("gravity_g", 0.38))
     grav_label = _gravity_regime_label(grav_g)
@@ -467,7 +482,7 @@ def evaluate_integrated_health(
             ),
             "detail": (
                 msg
-                + " Autonomous cardiac diagnostic instrumentation (12-lead ECG interpretation / troponin assay) is not built into TARSCARE; "
+                + " Autonomous cardiac diagnostic instrumentation (12-lead ECG interpretation / troponin assay) is not built into TARS Care; "
                 "immediate Crew Medical Officer (CMO) hands-on evaluation and onboard ECG strip capture are required."
             ),
             "rule_type": "MISSION_CONFIGURED_BASELINE_RULE",
@@ -730,9 +745,8 @@ def evaluate_integrated_health(
         # Never allow routine radiation logging or routine housekeeping recs to appear alongside an acute medical/hazard emergency
         recommendations = [r for r in recommendations if r.get("priority") != "ROUTINE"]
 
-    priority_rank = {"IMMEDIATE": 0, "HIGH": 1, "DEFERRED": 2, "ROUTINE": 3}
     severity_rank = {"CRITICAL": 0, "WARNING": 1, "NORMAL": 2}
-    recommendations.sort(key=lambda r: priority_rank.get(str(r.get("priority", "ROUTINE")).upper(), 9))
+    recommendations.sort(key=recommendation_sort_key)
     findings.sort(key=lambda f: severity_rank.get(str(f.get("severity", "NORMAL")).upper(), 9))
     active_alerts.sort(key=lambda a: severity_rank.get(str(a.get("severity", "NORMAL")).upper(), 9))
 
@@ -755,7 +769,7 @@ def evaluate_integrated_health(
     protocol_gap_notice = None
     if auto_emergency_recommended:
         protocol_gap_notice = (
-            "Capability boundary: TARSCARE does not integrate continuous 12-lead ECG waveform interpretation, cardiac biomarker blood assays "
+            "Capability boundary: TARS Care does not integrate continuous 12-lead ECG waveform interpretation, cardiac biomarker blood assays "
             "(troponin/D-dimer), or autonomous arrhythmia diagnosis. In-person Crew Medical Officer (CMO) examination and onboard medical kit equipment are mandatory."
         )
 
@@ -937,9 +951,37 @@ def evaluate_integrated_health(
         )
 
     from database import fetch_system_state
+    from donki_client import build_donki_eva_advisory
     from marscare_enhancer import build_marscare_extensions
     active_comm = comm_state or fetch_system_state("comm_state") or {}
+    donki_cfg = fetch_system_state("donki_secret_config") or {}
+    auto_donki_eva = bool(donki_cfg.get("auto_advisory_in_eva", True))
+    donki_advisory = (
+        build_donki_eva_advisory()
+        if auto_donki_eva
+        else {"advisories": [], "has_heliospheric_watch": False}
+    )
     baseline_dict = baseline if isinstance(baseline, dict) else (baseline.model_dump() if hasattr(baseline, "model_dump") else {})
+    eva_readiness = compute_eva_readiness(
+        latest=latest,
+        baseline=baseline,
+        rad_limits=rad_limits,
+        env_limits=env_limits,
+        assessment_summary={
+            "overall_status": overall_status.value,
+            "exercise_contraindicated": exercise_contraindicated,
+        },
+        latest_sans=latest_sans,
+        donki_advisory=donki_advisory,
+    )
+    predictive_runways = compute_predictive_runways(
+        latest=latest,
+        history=history,
+        baseline=baseline,
+        rad_limits=rad_limits,
+        env_limits=env_limits,
+    )
+
     result = {
         "overall_status": overall_status.value,
         "mission_day": latest["mission_day"],
@@ -963,6 +1005,9 @@ def evaluate_integrated_health(
         "active_alerts": active_alerts,
         "body_regions": body_regions,
         "rag_analysis": rag_summary,
+        "eva_readiness": eva_readiness,
+        "predictive_runways": predictive_runways,
+        "latest_sans": latest_sans,
     }
     result.update(build_marscare_extensions(latest, history, baseline_dict, active_comm, result))
     return result
@@ -1000,7 +1045,7 @@ def generate_local_emergency_protocol(
         ]
         citation = "CSA-CARDIO-CCISS-01 / NASA-CSTARS-MED-01"
         protocol_gap_notice = (
-            "TARSCARE has NO autonomous 12-lead ECG waveform analyzer, stethoscope audio classifier, or blood troponin/D-dimer assay. "
+            "TARS Care has NO autonomous 12-lead ECG waveform analyzer, stethoscope audio classifier, or blood troponin/D-dimer assay. "
             "Human Crew Medical Officer physical exam and onboard medical-kit checklist are required."
         )
     elif "rad" in hazard_key:
@@ -1015,7 +1060,7 @@ def generate_local_emergency_protocol(
         ]
         citation = "NASA-HRP-RAD-01 / CSA-RAD-2026-01"
         protocol_gap_notice = (
-            "TARSCARE tracks dosimeter readings and crew symptom logs but does not directly control spacecraft bulk-shielding doors or run onboard hematology assays; verify TEPC hardware and CMO lab kit directly."
+            "TARS Care tracks dosimeter readings and crew symptom logs but does not directly control spacecraft bulk-shielding doors or run onboard hematology assays; verify TEPC hardware and CMO lab kit directly."
         )
     elif "grav" in hazard_key or "cardio" in hazard_key or "ortho" in hazard_key:
         protocol_id = "EMG-GRAV-ORTHO-SYNC-02"
@@ -1029,7 +1074,7 @@ def generate_local_emergency_protocol(
         ]
         citation = "CSA-CARDIO-CCISS-01 / NASA-HRP-GRAV-01"
         protocol_gap_notice = (
-            "Requires hands-on CMO verification of orthostatic vital signs, ECG rhythm, and hydration tolerance; TARSCARE cannot evaluate structural cardiac pathology."
+            "Requires hands-on CMO verification of orthostatic vital signs, ECG rhythm, and hydration tolerance; TARS Care cannot evaluate structural cardiac pathology."
         )
     elif "env" in hazard_key or "co2" in hazard_key or "resp" in hazard_key:
         protocol_id = "EMG-ENV-ECLSS-ATMOS-03"
@@ -1057,7 +1102,7 @@ def generate_local_emergency_protocol(
         ]
         citation = "NASA-HRP-ISO-01 / NASA-CSTARS-MED-01"
         protocol_gap_notice = (
-            "TARSCARE does not perform psychiatric diagnosis or crisis clinical counseling; confidential CMO human support and Earth behavioral health consultation are essential."
+            "TARS Care does not perform psychiatric diagnosis or crisis clinical counseling; confidential CMO human support and Earth behavioral health consultation are essential."
         )
     else:
         protocol_id = "EMG-CSTARS-GEN-00"

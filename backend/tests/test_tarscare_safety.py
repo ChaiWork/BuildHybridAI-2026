@@ -1,4 +1,4 @@
-"""Automated safety, medical logic, API, RAG, and offline integrity tests for TARSCARE."""
+"""Automated safety, medical logic, API, RAG, and offline integrity tests for TARS Care."""
 
 from __future__ import annotations
 
@@ -455,3 +455,680 @@ def test_combined_assessment_route_and_history_filter(client):
     assert res_hist.status_code == 200
     hist = res_hist.json()
     assert "telemetry_history" in hist and len(hist["telemetry_history"]) >= 1
+
+
+def test_physiological_recommendation_sort_tie_breaker(client):
+    """Cardiopulmonary IMMEDIATE alerts always outrank concurrent behavioral IMMEDIATE/HIGH alerts."""
+    res_pq = client.post(
+        "/api/psych-questionnaire",
+        json={
+            "mission_day": 190,
+            "emotional_condition_rating": 2,
+            "psychological_stress_rating": 9,
+            "motivation_rating": 3,
+            "fatigue_rating": 9,
+            "sleep_difficulty_rating": 9,
+            "isolation_feeling_rating": 9,
+            "concentration_workload_rating": 3,
+            "journal_reflection": "Severe confinement distress Sol 190.",
+        },
+    )
+    assert res_pq.status_code == 200
+
+    res_crit = client.post(
+        "/api/measurements",
+        json={
+            "mission_day": 190,
+            "heart_rate_bpm": 128,
+            "systolic_bp_mmhg": 86,
+            "diastolic_bp_mmhg": 55,
+            "spo2_pct": 89.0,
+            "respiratory_rate_bpm": 28,
+            "sleep_duration_hrs": 3.5,
+            "mood_score": 2,
+            "stress_level": 9,
+            "chest_discomfort": True,
+            "shortness_of_breath": True,
+            "faintness_presyncope": True,
+        },
+    )
+    assert res_crit.status_code == 200
+    recs = res_crit.json()["assessment"]["recommendations"]
+    assert recs and recs[0]["priority"] == "IMMEDIATE"
+    assert recs[0]["procedure_code"] == "PROC-CARDIO-REDFLAG-01"
+    iso_indices = [
+        i for i, r in enumerate(recs) if "ISO" in str(r.get("procedure_code", "")) or "Isolation" in str(r.get("hazard", ""))
+    ]
+    if iso_indices:
+        assert 0 < iso_indices[0]
+
+
+def test_eva_readiness_and_predictive_runways(client):
+    """EVA readiness switches between HOLD and GO/CAUTION and computes deterministic runways."""
+    r_crit = client.post("/api/scenario/critical_orthostatic")
+    assert r_crit.status_code == 200
+    crit_body = r_crit.json()
+    eva_crit = crit_body["assessment"]["eva_readiness"]
+    assert eva_crit["status"] == "HOLD"
+    assert len(eva_crit["blocking_factors"]) >= 1
+
+    r_nom = client.post("/api/scenario/nominal")
+    assert r_nom.status_code == 200
+    nom_body = r_nom.json()
+    eva_nom = nom_body["assessment"]["eva_readiness"]
+    assert eva_nom["status"] in ("GO", "CAUTION")
+    assert eva_nom["score_pct"] >= 50
+    runways = nom_body["assessment"]["predictive_runways"]
+    for key in ("co2", "radiation_budget", "sleep_debt", "musculoskeletal"):
+        assert key in runways
+
+
+def test_sans_amsler_assessment_updates_eye_region_and_eva(client):
+    """Interactive Amsler Grid distortion updates eye triage region and EVA readiness advisories."""
+    r_nom = client.post("/api/scenario/nominal")
+    assert r_nom.status_code == 200
+
+    res = client.post(
+        "/api/sans/assessments",
+        json={
+            "mission_day": 191,
+            "eye_tested": "BOTH",
+            "wavy_lines_detected": True,
+            "scotoma_cells": ["D4", "E5"],
+            "near_acuity_shift": True,
+            "notes": "Mild central grid waviness post-microgravity shift",
+        },
+    )
+    assert res.status_code == 200
+    body = res.json()
+    assert body["sans_record"]["wavy_lines_detected"] is True
+    st = body["state"]
+    assert st["assessment"]["latest_sans"]["wavy_lines_detected"] is True
+    eye_region = next(
+        (r for r in st["assessment"]["marscare_body_regions"] if r["id"] == "eyes"),
+        None,
+    )
+    assert eye_region is not None
+    assert eye_region["status"] in ("WARNING", "CRITICAL")
+    eva_advisories = " ".join(st["assessment"]["eva_readiness"]["advisory_factors"]).lower()
+    assert "sans" in eva_advisories or "amsler" in eva_advisories
+
+
+def test_medkit_adjustment_and_flight_surgeon_consult_draft(client):
+    """Medical Kit tracking & Flight Surgeon draft omit private psych journals and never prescribe."""
+    res_pq = client.post(
+        "/api/psych-questionnaire",
+        json={
+            "mission_day": 192,
+            "emotional_condition_rating": 4,
+            "psychological_stress_rating": 7,
+            "journal_reflection": "SUPER_SECRET_DIARY_TOKEN_99",
+        },
+    )
+    assert res_pq.status_code == 200
+
+    mk_list = client.get("/api/medkit")
+    assert mk_list.status_code == 200
+    items = mk_list.json()["medical_kit"]
+    assert len(items) == 7
+    locked = next(i for i in items if i["item_code"] == "MED-CMO-LOCKED")
+    assert locked["cmo_auth_required"] is True
+
+    o2_before = next(i for i in items if i["item_code"] == "MED-O2-PORT")["quantity"]
+    adj = client.post(
+        "/api/medkit/adjust",
+        json={"item_code": "MED-O2-PORT", "quantity_delta": -1, "mark_inspected": True},
+    )
+    assert adj.status_code == 200
+    assert adj.json()["item"]["quantity"] == o2_before - 1
+
+    draft = client.post(
+        "/api/consult/flight-surgeon-draft",
+        json={
+            "cmo_notes": "Request asynchronous Flight Surgeon review of orthostatic fluids.",
+            "urgency": "WARNING",
+            "include_sans": True,
+        },
+    )
+    assert draft.status_code == 200
+    draft_body = draft.json()
+    preview = draft_body["markdown_preview"]
+    assert "SUPER_SECRET_DIARY_TOKEN_99" not in preview
+    assert "cmo" in preview.lower() or "flight surgeon" in preview.lower()
+    assert "prescribe" not in draft_body["report"]["summary"].lower() or "never" in preview.lower()
+
+
+def test_multi_crew_matrix_select_and_privacy_pin(client):
+    """Multi-crew switcher, severity-sorted CMO matrix redaction, and SHA-256 Privacy PIN gates."""
+    m_res = client.get("/api/crew/matrix")
+    assert m_res.status_code == 200
+    matrix = m_res.json()["crew_fleet_matrix"]
+    crew_ids = {m["crew_id"] for m in matrix}
+    assert crew_ids == {"ARES-IV-SUCHAI", "ARES-IV-VANCE", "ARES-IV-CHEN", "ARES-IV-OKAFOR"}
+    assert all(m["private_reflections_redacted"] is True for m in matrix)
+
+    sel = client.post("/api/crew/select", json={"crew_id": "ARES-IV-CHEN"})
+    assert sel.status_code == 200
+    assert sel.json()["active_crew_id"] == "ARES-IV-CHEN"
+    assert sel.json()["astronaut"]["astronaut_id"] == "ARES-IV-CHEN"
+
+    bad_pin = client.post(
+        "/api/crew/unlock-reflections",
+        json={"crew_id": "ARES-IV-CHEN", "pin": "0000"},
+    )
+    assert bad_pin.status_code == 403
+
+    ok_pin = client.post(
+        "/api/crew/unlock-reflections",
+        json={"crew_id": "ARES-IV-CHEN", "pin": "2026"},
+    )
+    assert ok_pin.status_code == 200
+    assert ok_pin.json()["unlocked"] is True
+
+    upd = client.post(
+        "/api/crew/pin",
+        json={"crew_id": "ARES-IV-CHEN", "current_pin": "2026", "new_pin": "4321"},
+    )
+    assert upd.status_code == 200 and upd.json()["updated"] is True
+
+    old_again = client.post(
+        "/api/crew/unlock-reflections",
+        json={"crew_id": "ARES-IV-CHEN", "pin": "2026"},
+    )
+    assert old_again.status_code == 403
+
+    new_ok = client.post(
+        "/api/crew/unlock-reflections",
+        json={"crew_id": "ARES-IV-CHEN", "pin": "4321"},
+    )
+    assert new_ok.status_code == 200 and new_ok.json()["unlocked"] is True
+
+
+def test_hw1_catalog_all_20_instruments_and_verified_urls(client):
+    """Hardware integration: all 20 instruments across Categories A-F load with official NASA/CSA URLs."""
+    res = client.get("/api/devices/catalog")
+    assert res.status_code == 200
+    body = res.json()
+    catalog = body["catalog"]
+    assert len(catalog) == 20
+    codes = {d["code"] for d in catalog}
+    expected_codes = {
+        "A1", "A2", "A3", "A4",
+        "B1", "B2", "B3", "B4",
+        "C1", "C2", "C3", "C4",
+        "D1", "D2",
+        "E1", "E2",
+        "F1", "F2", "F3", "F4",
+    }
+    assert codes == expected_codes
+
+    allowed_domains = ("https://www.nasa.gov/", "https://science.nasa.gov/", "https://osdr.nasa.gov/", "https://nlsp.nasa.gov/", "https://www.asc-csa.gc.ca/")
+    for dev in catalog:
+        assert dev["research_references"], f"{dev['device_id']} missing references"
+        for ref in dev["research_references"]:
+            assert ref["url"].startswith(allowed_domains), f"Unverified URL in {dev['device_id']}: {ref['url']}"
+        assert body["device_states"][dev["device_id"]]["connection_status"] == "not_connected"
+
+    state_res = client.get("/api/state")
+    assert state_res.status_code == 200
+    assert len(state_res.json()["devices_catalog"]) == 20
+
+
+def test_hw2_truthful_hardware_probe_and_simulation_lifecycle(client):
+    """Hardware integration: failed physical probe never fakes Connected/NORMAL; simulation labels SYNTHETIC_DEMO."""
+    probe = client.post("/api/devices/CSA_BIO_MONITOR/connect", json={"mode": "hardware"})
+    assert probe.status_code == 200
+    pbody = probe.json()
+    assert pbody["connected"] is False
+    assert pbody["connection_status"] in ("unavailable", "error")
+    assert pbody["connection_status"] != "connected"
+
+    sim = client.post("/api/devices/CSA_BIO_MONITOR/connect", json={"mode": "simulation"})
+    assert sim.status_code == 200
+    assert sim.json()["connection_status"] == "simulation"
+    assert sim.json()["connected"] is False
+
+    col = client.post("/api/devices/CSA_BIO_MONITOR/collect")
+    assert col.status_code == 200
+    staged = col.json()["staged_readings"]
+    assert len(staged) >= 4
+    assert all(r["data_source"] == "simulated" for r in staged)
+    assert all(r["connection_status"] == "simulation" for r in staged)
+    assert all(r["confirmed"] is False for r in staged)
+
+    # Reject unconfirmed readings cleanly
+    unconf = client.post(
+        "/api/devices/CSA_BIO_MONITOR/confirm",
+        json={"measurements": staged, "evaluate_health_assessment": True},
+    )
+    assert unconf.status_code == 422
+
+    # Astronaut edits/confirms simulated HR reading cleanly
+    confirmed_items = [{**r, "confirmed": True} for r in staged]
+    conf_ok = client.post(
+        "/api/devices/CSA_BIO_MONITOR/confirm",
+        json={
+            "measurements": confirmed_items,
+            "evaluate_health_assessment": True,
+            "notes": "Verified Bio-Monitor simulation packet",
+        },
+    )
+    assert conf_ok.status_code == 200
+    cbody = conf_ok.json()
+    assert len(cbody["saved_measurements"]) == len(confirmed_items)
+    assert cbody["state"]["latest_telemetry"]["provenance"] == "SYNTHETIC_DEMO"
+    assert len(cbody["state"]["device_measurements"]) >= len(confirmed_items)
+
+    disc = client.post("/api/devices/CSA_BIO_MONITOR/disconnect")
+    assert disc.status_code == 200
+    assert disc.json()["connection_status"] == "disconnected"
+
+
+def test_hw3_import_unit_gy_vs_sv_protection_and_confirm(client):
+    """Hardware integration: CSV/JSON import rejects Gy/Sv confusion and updates radiation hazard when valid."""
+    bad_csv = "measurement_type,value,unit,recorded_at\nabsorbed_dose,0.52,mSv,2026-11-15T09:00:00Z"
+    parse_bad = client.post(
+        "/api/devices/CANS_SPECTROMETER/parse-import",
+        json={"format": "csv", "filename": "bad_units.csv", "raw_text": bad_csv},
+    )
+    assert parse_bad.status_code == 200
+    pb = parse_bad.json()
+    assert pb["invalid_count"] == 1
+    assert pb["parsed_readings"][0]["quality_status"] == "invalid_unit"
+    assert "gy/mgy" in pb["parsed_readings"][0]["quality_note"].lower()
+
+    # Attempting to confirm invalid_unit fails 422 without saving
+    bad_confirm = client.post(
+        "/api/devices/CANS_SPECTROMETER/confirm",
+        json={"measurements": [{**pb["parsed_readings"][0], "confirmed": True}], "evaluate_health_assessment": True},
+    )
+    assert bad_confirm.status_code == 422
+
+    # Valid Gy/Sv storm reading escalates Space Radiation hazard cleanly
+    good_csv = (
+        "measurement_type,value,unit,recorded_at\n"
+        "absorbed_dose,2.80,mGy,2026-11-15T10:00:00Z\n"
+        "equivalent_dose_rate,7.20,mSv/day,2026-11-15T10:00:00Z\n"
+    )
+    parse_ok = client.post(
+        "/api/devices/CANS_SPECTROMETER/parse-import",
+        json={"format": "csv", "filename": "cans_spe.csv", "raw_text": good_csv},
+    )
+    assert parse_ok.status_code == 200
+    po = parse_ok.json()
+    assert po["valid_count"] == 2 and po["invalid_count"] == 0
+
+    confirmed = [{**r, "confirmed": True} for r in po["parsed_readings"]]
+    save_ok = client.post(
+        "/api/devices/CANS_SPECTROMETER/confirm",
+        json={"measurements": confirmed, "evaluate_health_assessment": True},
+    )
+    assert save_ok.status_code == 200
+    s_state = save_ok.json()["state"]
+    assert s_state["latest_telemetry"]["provenance"] == "USER_ENTERED"
+    assert s_state["latest_telemetry"]["absorbed_dose_mgy"] == 2.8
+    assert s_state["latest_telemetry"]["equivalent_dose_rate_msv_day"] == 7.2
+    assert s_state["assessment"]["hazard_statuses"]["Space Radiation"] == "CRITICAL"
+
+
+def test_hw4_non_vital_kits_countermeasures_and_guided_exams(client):
+    """Hardware integration: Thigh Cuffs, Veggie, Biosamples never fabricate vitals; IOP flags abnormality; assays separate."""
+    before_state = client.get("/api/state").json()
+    tele_count_before = len(before_state["telemetry_history"])
+
+    for non_vital_id in ("THIGH_CUFFS_COUNTERMEASURE", "VEGGIE_SPACE_GARDENING", "SALIVA_BLOTTING_BOOKLET", "BIOLOGICAL_SAMPLING_KIT"):
+        assert client.post(f"/api/devices/{non_vital_id}/connect", json={"mode": "simulation"}).status_code == 400
+        assert client.post(f"/api/devices/{non_vital_id}/collect").status_code == 400
+
+    # Countermeasure & wellbeing logs do not alter physiological vitals row count
+    cuff_res = client.post(
+        "/api/devices/THIGH_CUFFS_COUNTERMEASURE/examination",
+        json={"mission_day": 184, "summary": "45-min thigh cuff session", "findings": {"duration_mins": 45}, "confirmed": True},
+    )
+    assert cuff_res.status_code == 200
+    assert len(cuff_res.json()["state"]["telemetry_history"]) == tele_count_before
+
+    # Biological sample collection & separate lab assay import
+    bio_res = client.post(
+        "/api/devices/BIOLOGICAL_SAMPLING_KIT/biosample",
+        json={"sample_type": "Whole Blood", "mission_day": 184, "storage_location": "MELFI-A Tray 1", "notes": "Fasting draw"},
+    )
+    assert bio_res.status_code == 200
+    sample_uid = bio_res.json()["biosample"]["sample_uid"]
+    assert bio_res.json()["biosample"]["status"] == "COLLECTED_STORED"
+
+    assay_res = client.post(
+        f"/api/devices/biosamples/{sample_uid}/assay",
+        json={
+            "format": "json",
+            "filename": "cytokines.json",
+            "raw_text": '{"assays":[{"biomarker":"IL-6","value":2.1,"unit":"pg/mL"}]}',
+        },
+    )
+    assert assay_res.status_code == 200
+    assert assay_res.json()["biosample"]["status"] == "ASSAY_IMPORTED"
+    assert assay_res.json()["biosample"]["assay_results"]["markers"][0]["biomarker"] == "IL-6"
+
+    # Eye-pressure exam flags abnormal IOP (> 21 mmHg) & Ultrasound retains operator disclaimer
+    iop_res = client.post(
+        "/api/devices/OCULAR_TONOMETER_SANS/examination",
+        json={"mission_day": 184, "summary": "Tonometry check", "findings": {"iop_od_mmhg": 24.0, "iop_os_mmhg": 18.0}, "confirmed": True},
+    )
+    assert iop_res.status_code == 200
+    assert iop_res.json()["examination"]["abnormal_flag"] is True
+    assert "21 mmHg" in iop_res.json()["examination"]["abnormal_reason"]
+
+    us_res = client.post(
+        "/api/devices/ULTRASOUND_VASCULAR/examination",
+        json={
+            "mission_day": 184,
+            "summary": "Internal jugular vein view recorded",
+            "findings": {"anatomical_window": "IJV"},
+            "attachments": [{"filename": "ijv_scan.png", "mime_type": "image/png", "size_bytes": 1024}],
+            "confirmed": True,
+        },
+    )
+    assert us_res.status_code == 200
+    assert "automated ultrasound diagnosis is not performed" in us_res.json()["examination"]["summary_note"].lower()
+
+
+def test_donki_1_all_11_endpoints_normalization_and_secret_safety(client, monkeypatch):
+    """DONKI: All 11 official NASA endpoints parse cleanly and raw NASA_API_KEY never leaks in API JSON."""
+    import json
+    import urllib.parse
+    import donki_client
+
+    secret_val = "TESTKEY_DO_NOT_LEAK_9999"
+    cfg_res = client.post("/api/donki/config", json={"api_key": secret_val, "auto_advisory_in_eva": True})
+    assert cfg_res.status_code == 200
+    cfg_body = cfg_res.json()
+    assert cfg_body["config"]["using_custom_key"] is True
+    assert "TEST" in cfg_body["config"]["key_status"]
+    assert "9999" in cfg_body["config"]["key_status"]
+    assert secret_val not in json.dumps(cfg_body)
+
+    called_urls = []
+    mock_payloads = {
+        "/DONKI/CME": [{
+            "activityID": "2024-05-10T01:00:00-CME-001",
+            "startTime": "2024-05-10T01:00:00Z",
+            "sourceLocation": "S18W35",
+            "note": "Halo CME associated with active region AR3664",
+            "cmeAnalyses": [{"isMostAccurate": True, "speed": 1150, "halfAngle": 42, "type": "O"}],
+            "linkedEvents": [{"activityID": "2024-05-10T00:50:00-FLR-001"}],
+            "link": "https://webtools.ccmc.gsfc.nasa.gov/DONKI/view/CME/31001/-1",
+        }],
+        "/DONKI/CMEAnalysis": [{
+            "time21_5": "2024-05-10T04:15:00Z",
+            "speed": 1220,
+            "halfAngle": 45,
+            "type": "O",
+            "isMostAccurate": True,
+            "associatedCMEID": "2024-05-10T01:00:00-CME-001",
+            "catalog": "M2M_CATALOG",
+            "link": "https://webtools.ccmc.gsfc.nasa.gov/DONKI/view/CMEAnalysis/31002/-1",
+        }],
+        "/DONKI/GST": [{
+            "gstID": "2024-05-11T02:00:00-GST-001",
+            "startTime": "2024-05-11T02:00:00Z",
+            "allKpIndex": [{"observedTime": "2024-05-11T03:00:00Z", "kpIndex": 8.0, "source": "NOAA"}],
+            "link": "https://webtools.ccmc.gsfc.nasa.gov/DONKI/view/GST/31003/-1",
+        }],
+        "/DONKI/IPS": [{
+            "activityID": "2024-05-10T17:00:00-IPS-001",
+            "eventTime": "2024-05-10T17:00:00Z",
+            "location": "Earth",
+            "catalog": "M2M_CATALOG",
+            "link": "https://webtools.ccmc.gsfc.nasa.gov/DONKI/view/IPS/31004/-1",
+        }],
+        "/DONKI/FLR": [{
+            "flrID": "2024-05-10T00:50:00-FLR-001",
+            "beginTime": "2024-05-10T00:40:00Z",
+            "peakTime": "2024-05-10T00:55:00Z",
+            "classType": "X1.8",
+            "sourceLocation": "S18W35",
+            "activeRegionNum": 3664,
+            "link": "https://webtools.ccmc.gsfc.nasa.gov/DONKI/view/FLR/31005/-1",
+        }],
+        "/DONKI/SEP": [{
+            "sepID": "2024-05-10T02:30:00-SEP-001",
+            "eventTime": "2024-05-10T02:30:00Z",
+            "instruments": [{"displayName": "GOES-16 SEISS >10 MeV"}],
+            "linkedEvents": [{"activityID": "2024-05-10T01:00:00-CME-001"}],
+            "link": "https://webtools.ccmc.gsfc.nasa.gov/DONKI/view/SEP/31006/-1",
+        }],
+        "/DONKI/MPC": [{
+            "mpcID": "2024-05-11T01:10:00-MPC-001",
+            "eventTime": "2024-05-11T01:10:00Z",
+            "link": "https://webtools.ccmc.gsfc.nasa.gov/DONKI/view/MPC/31007/-1",
+        }],
+        "/DONKI/RBE": [{
+            "rbeID": "2024-05-11T12:00:00-RBE-001",
+            "eventTime": "2024-05-11T12:00:00Z",
+            "link": "https://webtools.ccmc.gsfc.nasa.gov/DONKI/view/RBE/31008/-1",
+        }],
+        "/DONKI/HSS": [{
+            "hssID": "2024-05-09T09:00:00-HSS-001",
+            "eventTime": "2024-05-09T09:00:00Z",
+            "link": "https://webtools.ccmc.gsfc.nasa.gov/DONKI/view/HSS/31009/-1",
+        }],
+        "/DONKI/WSAEnlilSimulations": [{
+            "simulationID": "M2M_20240510_01",
+            "modelCompletionTime": "2024-05-10T05:00:00Z",
+            "estimatedShockArrivalTime": "2024-05-12T18:00:00Z",
+            "impactList": [{"isGlancingBlow": False, "location": "Mars", "arrivalTime": "2024-05-12T18:00:00Z"}],
+            "link": "https://webtools.ccmc.gsfc.nasa.gov/DONKI/view/WSAEnlil/31010/-1",
+        }],
+        "/DONKI/notifications": [{
+            "messageType": "SEP",
+            "messageID": "20240510-AL-001",
+            "messageURL": "https://webtools.ccmc.gsfc.nasa.gov/DONKI/view/Alert/20240510-AL-001/1",
+            "messageIssueTime": "2024-05-10T02:45:00Z",
+            "messageBody": "## Space Weather Research Center\nSEP proton watch issued for inner heliosphere.",
+        }],
+    }
+
+    def fake_get(url: str, timeout_sec: float = 15.0):
+        called_urls.append(url)
+        parsed = urllib.parse.urlparse(url)
+        assert f"api_key={secret_val}" in parsed.query
+        return mock_payloads[parsed.path]
+
+    monkeypatch.setattr(donki_client, "_http_get_json", fake_get)
+
+    # Empty payload auto-defaults to last 30 UTC days across all 11 endpoints concurrently
+    from datetime import datetime, timedelta, timezone
+    expected_end = datetime.now(timezone.utc).date()
+    expected_start = expected_end - timedelta(days=30)
+
+    sync_res = client.post("/api/donki/sync", json={})
+    assert sync_res.status_code == 200
+    body = sync_res.json()
+    assert len(called_urls) == 11
+    assert body["sync_result"]["status"] == "SYNCED"
+    assert body["sync_result"]["fetched_count"] == 11
+    assert body["sync_result"]["sync_meta"]["last_window"] == {
+        "start_date": expected_start.isoformat(),
+        "end_date": expected_end.isoformat(),
+    }
+
+    raw_json = json.dumps(body)
+    assert secret_val not in raw_json
+
+    donki_state = client.get("/api/donki/state").json()
+    assert secret_val not in json.dumps(donki_state)
+    counts = donki_state["service_counts"]
+    assert set(counts.keys()) == set(donki_client.ALL_DONKI_SERVICE_IDS)
+
+    by_type = {ev["service_type"]: ev for ev in donki_state["events"]}
+    assert by_type["GST"]["regime_scope"] == "EARTH_MAGNETOSPHERE"
+    assert by_type["MPC"]["regime_scope"] == "EARTH_MAGNETOSPHERE"
+    assert by_type["RBE"]["regime_scope"] == "EARTH_MAGNETOSPHERE"
+    assert by_type["SEP"]["regime_scope"] == "HELIOSPHERIC_DEEP_SPACE"
+    assert by_type["SEP"]["severity"] == "CRITICAL"
+    assert by_type["FLR"]["severity"] == "CRITICAL"
+    assert by_type["WSAEnlilSimulations"]["severity"] == "CRITICAL"
+
+
+def test_donki_2_offline_blackout_http429_and_eva_advisory(client, monkeypatch):
+    """DONKI: OFFLINE blocks polling while preserving SQLite cache; HTTP 429 handled cleanly; EVA advisory leaves dosimetry intact."""
+    import io
+    import urllib.error
+    import urllib.parse
+    import donki_client
+
+    before_state = client.get("/api/state").json()
+    base_mgy = before_state["latest_telemetry"]["absorbed_dose_mgy"]
+    base_msv_day = before_state["latest_telemetry"]["equivalent_dose_rate_msv_day"]
+
+    def fake_sep(url: str, timeout_sec: float = 15.0):
+        return [{
+            "sepID": "2026-11-15T01:00:00-SEP-TEST",
+            "eventTime": "2026-11-15T01:00:00Z",
+            "instruments": [{"displayName": "SOHO EPHIN"}],
+            "link": "https://api.nasa.gov/DONKI/SEP",
+        }]
+
+    monkeypatch.setattr(donki_client, "_http_get_json", fake_sep)
+    res_sep = client.post(
+        "/api/donki/sync",
+        json={"start_date": "2026-11-14", "end_date": "2026-11-15", "services": ["SEP"]},
+    )
+    assert res_sep.status_code == 200
+    assert res_sep.json()["sync_result"]["status"] == "SYNCED"
+
+    # Active SEP advisory surfaces in EVA readiness without overwriting personal dosimetry
+    after_sep_state = res_sep.json()["state"]
+    assert after_sep_state["latest_telemetry"]["absorbed_dose_mgy"] == base_mgy
+    assert after_sep_state["latest_telemetry"]["equivalent_dose_rate_msv_day"] == base_msv_day
+    eva_adv = " ".join(after_sep_state["assessment"]["eva_readiness"]["advisory_factors"])
+    assert "DONKI SEP Cache" in eva_adv
+
+    # OFFLINE blackout blocks external polling & auto-sync while preserving SQLite cache
+    assert client.post("/api/comm/mode", json={"mode": "OFFLINE"}).status_code == 200
+    assert donki_client.should_auto_sync() is False
+
+    def forbid_http(*args, **kwargs):
+        raise AssertionError("Outbound HTTP call must not occur while Earth Link is OFFLINE")
+
+    monkeypatch.setattr(donki_client, "_http_get_json", forbid_http)
+    offline_sync = client.post("/api/donki/sync", json={"services": ["CME", "SEP"]})
+    assert offline_sync.status_code == 200
+    assert offline_sync.json()["sync_result"]["status"] == "BLOCKED_OFFLINE"
+    assert len(offline_sync.json()["donki_state"]["events"]) == 1
+
+    # Reconnect and verify HTTP 429 rate-limit graceful partial handling
+    assert client.post("/api/comm/mode", json={"mode": "CONNECTED"}).status_code == 200
+
+    def partial_rate_limit(url: str, timeout_sec: float = 15.0):
+        path = urllib.parse.urlparse(url).path
+        if path == "/DONKI/FLR":
+            raise urllib.error.HTTPError(url, 429, "Too Many Requests", {}, io.BytesIO(b"rate limit"))
+        return []
+
+    monkeypatch.setattr(donki_client, "_http_get_json", partial_rate_limit)
+    partial_res = client.post("/api/donki/sync", json={"services": ["CME", "FLR"]})
+    assert partial_res.status_code == 200
+    ps = partial_res.json()["sync_result"]
+    assert ps["status"] == "PARTIAL"
+    assert ps["sync_meta"]["service_statuses"]["FLR"]["status"] == "RATE_LIMITED"
+    # Existing SEP cache survives failed/partial sync cleanly
+    assert partial_res.json()["donki_state"]["service_counts"]["SEP"] == 1
+
+
+def test_insight_mars_weather_normalization_gaps_offline_and_habitat_isolation(client, monkeypatch):
+    """InSight: Per-Sol AT/HWS/PRE/WD parsing, missing-sensor gaps, OFFLINE blocking, and habitat isolation."""
+    import json
+    import urllib.parse
+    import insight_client
+
+    secret_val = "INSIGHT_SECRET_KEY_8888"
+    assert client.post("/api/donki/config", json={"api_key": secret_val}).status_code == 200
+
+    before_state = client.get("/api/state").json()
+    base_cabin_kpa = before_state["latest_telemetry"]["cabin_pressure_kpa"]
+    base_cabin_c = before_state["latest_telemetry"]["cabin_temp_c"]
+
+    def fake_insight(url: str, timeout_sec: float = 10.0):
+        parsed = urllib.parse.urlparse(url)
+        assert parsed.path == "/insight_weather/"
+        assert f"api_key={secret_val}" in parsed.query
+        return {
+            "sol_keys": ["680", "681"],
+            "680": {
+                "AT": {"av": -63.5, "mn": -95.2, "mx": -17.4, "ct": 170000},
+                "PRE": {"av": 748.2, "mn": 720.1, "mx": 766.8, "ct": 880000},
+                # Simulate NASA InSight power-saving missing HWS / WD sensors on Sol 680
+                "Season": "fall",
+                "Northern_season": "early winter",
+                "Southern_season": "early summer",
+                "Month_ordinal": 10,
+                "First_UTC": "2020-10-24T18:00:00Z",
+                "Last_UTC": "2020-10-25T18:39:00Z",
+            },
+            "681": {
+                "AT": {"av": -62.3, "mn": -96.8, "mx": -15.9, "ct": 177556},
+                "HWS": {"av": 7.2, "mn": 1.0, "mx": 22.4, "ct": 88628},
+                "PRE": {"av": 750.5, "mn": 722.0, "mx": 768.7, "ct": 887776},
+                "WD": {
+                    "0": {"compass_degrees": 0.0, "compass_point": "N", "compass_right": 0.0, "compass_up": 1.0, "ct": 254},
+                    "13": {"compass_degrees": 292.5, "compass_point": "WNW", "compass_right": -0.9238, "compass_up": 0.3826, "ct": 27816},
+                    "most_common": {"compass_degrees": 292.5, "compass_point": "WNW", "ct": 27816},
+                },
+                "Season": "fall",
+                "Northern_season": "early winter",
+                "Southern_season": "early summer",
+                "Month_ordinal": 10,
+                "First_UTC": "2020-10-25T18:39:00Z",
+                "Last_UTC": "2020-10-26T19:18:00Z",
+            },
+            "validity_checks": {
+                "681": {
+                    "AT": {"sol_hours_with_data": list(range(24)), "valid": True},
+                    "HWS": {"sol_hours_with_data": list(range(24)), "valid": True},
+                }
+            },
+        }
+
+    monkeypatch.setattr(insight_client, "_http_get_insight_json", fake_insight)
+    res = client.post("/api/insight/sync", json={"feedtype": "json", "version": "1.0"})
+    assert res.status_code == 200
+    body = res.json()
+    assert secret_val not in json.dumps(body)
+    assert body["sync_result"]["status"] == "SYNCED"
+    assert body["sync_result"]["fetched_count"] == 2
+
+    # Exterior Martian ~0.75 kPa / -62C never overwrites habitat interior cabin telemetry
+    assert body["state"]["latest_telemetry"]["cabin_pressure_kpa"] == base_cabin_kpa
+    assert body["state"]["latest_telemetry"]["cabin_temp_c"] == base_cabin_c
+
+    ins = body["insight_state"]
+    assert ins["summary"]["latest_sol_id"] == "681"
+    assert ins["summary"]["latest_wind_compass"] == "WNW"
+    sol_by_id = {s["sol_id"]: s for s in ins["sols"]}
+    assert "HWS" in sol_by_id["680"]["missing_sensors"]
+    assert "WD" in sol_by_id["680"]["missing_sensors"]
+    assert sol_by_id["681"]["missing_sensors"] == []
+    assert len(sol_by_id["681"]["wd"]["bins"]) == 2
+
+    # Empty sol_keys (InSight data gap) returns EMPTY_GAP without wiping SQLite cache
+    monkeypatch.setattr(insight_client, "_http_get_insight_json", lambda url, timeout_sec=10.0: {"sol_keys": []})
+    gap_res = client.post("/api/insight/sync", json={})
+    assert gap_res.status_code == 200
+    assert gap_res.json()["sync_result"]["status"] == "EMPTY_GAP"
+    assert gap_res.json()["insight_state"]["summary"]["sol_count"] == 2
+
+    # OFFLINE blackout blocks outbound HTTP while serving SQLite cache cleanly
+    assert client.post("/api/comm/mode", json={"mode": "OFFLINE"}).status_code == 200
+    assert insight_client.should_auto_sync_insight() is False
+    monkeypatch.setattr(
+        insight_client,
+        "_http_get_insight_json",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("Must not poll InSight when OFFLINE")),
+    )
+    off_res = client.post("/api/insight/sync", json={})
+    assert off_res.status_code == 200
+    assert off_res.json()["sync_result"]["status"] == "BLOCKED_OFFLINE"
+    assert client.get("/api/insight/state").json()["summary"]["sol_count"] == 2
+
+

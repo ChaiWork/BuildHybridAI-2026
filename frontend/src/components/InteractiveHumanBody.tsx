@@ -357,7 +357,7 @@ export const InteractiveHumanBody: React.FC<InteractiveHumanBodyProps> = ({
               )
             }
             className="mc-btn-secondary px-4 py-2.5 text-sm inline-flex items-center justify-center gap-1.5"
-            title="Ask TARSCARE Health Assistant about this body region"
+            title="Ask TARS Care Health Assistant about this body region"
           >
             <MessageSquare className="w-4 h-4 text-[#A5D8FF]" />
             <span>Ask AI</span>

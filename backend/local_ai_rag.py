@@ -1,5 +1,5 @@
 """
-Local AI & Expanded NASA/CSA Scientific Corpus Helpers for TARSCARE AI.
+Local AI & Expanded NASA/CSA Scientific Corpus Helpers for TARS Care AI.
 Zero-hang offline detection for Sentence-Transformers (checks local HuggingFace cache folder before importing torch)
 and local Ollama (127.0.0.1:11434), with full-corpus hybrid dense+lexical retrieval, SQLite AI config,
 /api/chat synthesis, and post-generation medical safety & citation verification.
@@ -214,8 +214,8 @@ EXTRA_CORPUS_DICTS: List[Dict[str, Any]] = [
     },
     {
         "doc_id": "TARSCARE-SPEC-01",
-        "title": "TARSCARE Operational Safety Rules: Insufficient Evidence, Conflict Handling & Scope",
-        "agency": "TARSCARE System Spec",
+        "title": "TARS Care Operational Safety Rules: Insufficient Evidence, Conflict Handling & Scope",
+        "agency": "TARS Care System Spec",
         "year": "2026",
         "url": "local://tarscare-operational-safety-spec",
         "hazard_category": "Distance from Earth",
@@ -229,19 +229,19 @@ EXTRA_CORPUS_DICTS: List[Dict[str, Any]] = [
             (
                 "Insufficient Evidence & Non-Speculation Policy",
                 "When no onboard NASA/CSA passage directly supports a user's question above retrieval confidence and keyword-coverage thresholds, "
-                "TARSCARE explicitly reports insufficient evidence, refuses to guess or invent scientific citations/limits, and recommends consulting "
+                "TARS Care explicitly reports insufficient evidence, refuses to guess or invent scientific citations/limits, and recommends consulting "
                 "the onboard Crew Medical Officer (CMO) checklist or queuing a Store-and-Forward Flight Surgeon packet."
             ),
             (
                 "Contradictory or Conflicting Scientific Sources Protocol",
                 "When two retrieved scientific documents contradict each other or represent incompatible gravity/radiation regimes (e.g., Earth-altitude "
-                "ARMAS vs. deep-space GCR/SPE, or 0g microgravity vs. 0.38g Mars vs. 1g Earth clinical norms), TARSCARE does NOT suppress either document "
+                "ARMAS vs. deep-space GCR/SPE, or 0g microgravity vs. 0.38g Mars vs. 1g Earth clinical norms), TARS Care does NOT suppress either document "
                 "or guess a single winner autonomously. Both citations are presented side-by-side with an explicit Conflict Notice, the system adopts "
                 "the more conservative safety precaution onboard, and escalates final reconciliation to the Crew Medical Officer and Flight Surgeons."
             ),
             (
                 "Non-Guarantee & Non-Diagnostic Boundary",
-                "TARSCARE is a prototype autonomous health-monitoring and decision-support tool, not a certified clinical device. Monitoring personal "
+                "TARS Care is a prototype autonomous health-monitoring and decision-support tool, not a certified clinical device. Monitoring personal "
                 "baselines and spaceflight countermeasures lowers operational risk but CANNOT guarantee that an astronaut will remain healthy on Mars."
             ),
         ],
@@ -781,9 +781,9 @@ def synthesize_with_ollama(
     )
     telemetry_block = _format_telemetry_context(astronaut_context)
     system_prompt = (
-        "You are TARSCARE, an autonomous deep-space astronaut health companion engineered for NASA Artemis/Mars operations.\n"
+        "You are TARS Care, an autonomous deep-space astronaut health companion engineered for NASA Artemis/Mars operations.\n"
         "Strict rules:\n"
-        "1. Ground every medical/spaceflight explanation ONLY in the provided [DOC-ID] NASA/CSA/TARSCARE reference passages and the live telemetry shown below.\n"
+        "1. Ground every medical/spaceflight explanation ONLY in the provided [DOC-ID] NASA/CSA/TARS Care reference passages and the live telemetry shown below.\n"
         "2. Cite supporting sources inline using exact bracketed IDs such as [NASA-HRP-RAD-01] or [CSA-CARDIO-CCISS-01]. NEVER invent a citation ID.\n"
         "3. Compare readings against the astronaut's personal baseline shown in telemetry when available (never print None or claim WARNING/CRITICAL vitals are normal). Note that ordinary Earth-based clinical reference ranges do not automatically represent safe operating limits in microgravity or partial gravity.\n"
         "4. Distinguish physical absorbed dose (Gy / mGy) from biological equivalent/effective dose (Sv / mSv); never invent NASA exposure limits.\n"
