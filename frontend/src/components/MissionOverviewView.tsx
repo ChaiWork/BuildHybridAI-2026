@@ -19,6 +19,7 @@ import {
   Clock,
   Eye,
   HeartPulse,
+  HelpCircle,
   Moon,
   Radio,
   ShieldAlert,
@@ -29,6 +30,7 @@ import {
 } from 'lucide-react';
 import { FullSystemState } from '../types';
 import { InteractiveHumanBody } from './InteractiveHumanBody';
+import { GuideSection } from './HealthGuideModal';
 import { formatRecordedTime, gravityRegimeLabel, provenanceLabel, statusMeta } from './uiHelpers';
 
 interface MissionOverviewViewProps {
@@ -45,6 +47,7 @@ interface MissionOverviewViewProps {
   onOpenCommCentre?: () => void;
   onOpenCompanion?: () => void;
   onOpenJournal?: () => void;
+  onOpenGuide?: (section?: GuideSection, stepId?: string) => void;
 }
 
 type TrendTab = 'vitals' | 'sleep_mood' | 'radiation' | 'environment';
@@ -63,6 +66,7 @@ export const MissionOverviewView: React.FC<MissionOverviewViewProps> = ({
   onOpenCommCentre,
   onOpenCompanion,
   onOpenJournal,
+  onOpenGuide,
 }) => {
   const [trendDays, setTrendDays] = useState<7 | 14 | 30>(14);
   const [trendTab, setTrendTab] = useState<TrendTab>('sleep_mood');
@@ -204,22 +208,22 @@ export const MissionOverviewView: React.FC<MissionOverviewViewProps> = ({
   }, [assessment, latest, state.comm_state.one_way_delay_minutes]);
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-6 lg:space-y-7">
       {/* 1. Crew Wayfinding Triage Band: Immediate 3-Question Health Glance */}
       <section
         aria-label="Crew Health Triage Overview"
-        className="mc-card p-3.5 lg:p-4 border border-[#A5D8FF]/20"
+        className="mc-card p-5 lg:p-6 border border-[#A5D8FF]/20"
       >
-        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-[180px_1fr_1fr_1fr_210px] gap-4 items-center">
+        <div className="grid grid-cols-1 md:grid-cols-3 min-[1520px]:grid-cols-[175px_1fr_1fr_1fr_205px] gap-4 lg:gap-5 items-stretch">
           {/* Sol & Context Anchor */}
-          <div className="flex md:flex-col justify-between items-baseline md:items-start gap-2 pr-2">
+          <div className="md:col-span-3 min-[1520px]:col-span-1 flex flex-wrap min-[1520px]:flex-col justify-between items-center min-[1520px]:items-start gap-3 pb-3 border-b border-white/[0.06] min-[1520px]:border-b-0 min-[1520px]:pb-0 min-[1520px]:pr-2">
             <div>
               <div className="text-sm text-[#E5E5E4]/80">Mission Sol</div>
               <div className="text-4xl lg:text-5xl font-bold text-[#FAF9FA] tabular-data tracking-tight">
                 {latest.mission_day}
               </div>
             </div>
-            <div className="flex flex-wrap gap-1.5 mt-1">
+            <div className="flex flex-wrap gap-2 mt-1">
               <span className="px-2.5 py-1 rounded-full text-xs bg-[#0B0D1A] text-[#A5D8FF] border border-[#A5D8FF]/30">
                 {gravityRegimeLabel(latest.gravity_g)}
               </span>
@@ -228,13 +232,12 @@ export const MissionOverviewView: React.FC<MissionOverviewViewProps> = ({
               </span>
               {assessment.eva_readiness && (
                 <span
-                  className={`px-2.5 py-1 rounded-full text-xs font-bold border ${
-                    assessment.eva_readiness.status === 'HOLD'
-                      ? 'bg-red-500/20 text-red-200 border-red-400/50'
-                      : assessment.eva_readiness.status === 'CAUTION'
-                        ? 'bg-amber-500/20 text-amber-200 border-amber-400/50'
-                        : 'bg-emerald-500/20 text-emerald-200 border-emerald-400/50'
-                  }`}
+                  className={`px-2.5 py-1 rounded-full text-xs font-bold border ${assessment.eva_readiness.status === 'HOLD'
+                    ? 'bg-red-500/20 text-red-200 border-red-400/50'
+                    : assessment.eva_readiness.status === 'CAUTION'
+                      ? 'bg-amber-500/20 text-amber-200 border-amber-400/50'
+                      : 'bg-emerald-500/20 text-emerald-200 border-emerald-400/50'
+                    }`}
                 >
                   EVA: {assessment.eva_readiness.status} ({assessment.eva_readiness.score_pct}%)
                 </span>
@@ -243,48 +246,48 @@ export const MissionOverviewView: React.FC<MissionOverviewViewProps> = ({
           </div>
 
           {/* Question 1: How am I doing? */}
-          <div className="rounded-xl bg-[#0B0D1A] p-3.5 h-full flex flex-col justify-between">
-            <div className="flex items-center justify-between gap-2 mb-1.5">
+          <div className="rounded-xl bg-[#0B0D1A] p-4 h-full flex flex-col justify-between gap-2">
+            <div className="flex items-center justify-between gap-2">
               <h2 className="text-sm font-semibold text-[#A5D8FF]">How am I doing?</h2>
               <span className={`px-3 py-0.5 rounded-full text-xs font-semibold ${overallMeta.badgeClass}`}>
                 {overallMeta.label}
               </span>
             </div>
-            <p className="text-sm text-[#FAF9FA] leading-snug">
+            <p className="text-sm text-[#FAF9FA] leading-relaxed">
               {glance?.how_am_i_doing || 'Evaluation complete against your personal mission baseline.'}
             </p>
           </div>
 
           {/* Question 2: What has changed? */}
-          <div className="rounded-xl bg-[#0B0D1A] p-3.5 h-full flex flex-col justify-between">
-            <h2 className="text-sm font-semibold text-[#A5D8FF] mb-1.5">What has changed?</h2>
-            <p className="text-sm text-[#E5E5E4] leading-snug">
+          <div className="rounded-xl bg-[#0B0D1A] p-4 h-full flex flex-col justify-between gap-2">
+            <h2 className="text-sm font-semibold text-[#A5D8FF]">What has changed?</h2>
+            <p className="text-sm text-[#E5E5E4] leading-relaxed">
               {glance?.what_has_changed || 'Monitoring 30-Sol physiological shifts.'}
             </p>
           </div>
 
           {/* Question 3: Should I take any action? */}
-          <div className="rounded-xl bg-[#0B0D1A] p-3.5 h-full flex flex-col justify-between gap-2">
-            <div>
-              <h2 className="text-sm font-semibold text-[#A5D8FF] mb-1.5">Should I take any action?</h2>
-              <p className="text-sm text-[#E5E5E4] leading-snug">
+          <div className="rounded-xl bg-[#0B0D1A] p-4 h-full flex flex-col justify-between gap-2.5">
+            <div className="space-y-2">
+              <h2 className="text-sm font-semibold text-[#A5D8FF]">Should I take any action?</h2>
+              <p className="text-sm text-[#E5E5E4] leading-relaxed">
                 {glance?.should_i_take_action || 'Continue daily countermeasures and log check-ins.'}
               </p>
             </div>
             {assessment.exercise_contraindicated && (
-              <div className="rounded-lg bg-red-500/15 border border-red-400/40 px-2.5 py-1.5 text-xs font-semibold text-red-200">
+              <div className="rounded-lg bg-red-500/15 border border-red-400/40 px-3 py-2 text-xs font-semibold text-red-200">
                 Exercise Hold Active — Medical triage priority before physical countermeasures
               </div>
             )}
           </div>
 
           {/* Action CTA Column */}
-          <div className="flex flex-col gap-2.5">
+          <div className="md:col-span-3 min-[1520px]:col-span-1 flex flex-wrap min-[1520px]:flex-col items-center min-[1520px]:items-stretch justify-end gap-3 pt-1 min-[1520px]:pt-0">
             {(assessment.overall_status === 'CRITICAL' || assessment.auto_emergency_recommended) && (
               <button
                 type="button"
                 onClick={onOpenEmergency}
-                className="w-full px-4 py-3 rounded-xl text-sm font-bold bg-red-500/20 hover:bg-red-500/30 border border-red-400/60 text-red-100 inline-flex items-center justify-center gap-2"
+                className="w-full sm:w-auto min-[1520px]:w-full px-4 py-3 rounded-xl text-sm font-bold bg-red-500/20 hover:bg-red-500/30 border border-red-400/60 text-red-100 inline-flex items-center justify-center gap-2"
               >
                 <ShieldAlert className="w-4 h-4 text-red-300" />
                 <span>Launch Emergency Checklist</span>
@@ -293,16 +296,26 @@ export const MissionOverviewView: React.FC<MissionOverviewViewProps> = ({
             <button
               type="button"
               onClick={() => onStartAssessment(selectedRegionId)}
-              className="mc-btn-primary w-full px-5 py-3 text-sm inline-flex items-center justify-center gap-2"
+              className="mc-btn-primary w-full sm:w-auto min-[1520px]:w-full px-6 py-3 text-sm inline-flex items-center justify-center gap-2"
             >
               <span>Start Assessment</span>
               <ArrowRight className="w-4 h-4" />
             </button>
+            {onOpenGuide && (
+              <button
+                type="button"
+                onClick={() => onOpenGuide('walkthrough', 'overview')}
+                className="mc-btn-secondary w-full sm:w-auto min-[1520px]:w-full px-4 py-2 text-xs inline-flex items-center justify-center gap-1.5"
+              >
+                <HelpCircle className="w-3.5 h-3.5 text-[#A5D8FF]" />
+                <span>How to Assess</span>
+              </button>
+            )}
             {assessment.overall_status === 'WARNING' && !assessment.auto_emergency_recommended && (
               <button
                 type="button"
                 onClick={onOpenEmergency}
-                className="mc-btn-secondary w-full px-4 py-2 text-xs inline-flex items-center justify-center gap-1.5"
+                className="mc-btn-secondary w-full sm:w-auto min-[1520px]:w-full px-4 py-2.5 text-xs inline-flex items-center justify-center gap-1.5"
               >
                 <ShieldAlert className="w-3.5 h-3.5 text-amber-300" />
                 <span>Onboard Protocol</span>
@@ -325,23 +338,22 @@ export const MissionOverviewView: React.FC<MissionOverviewViewProps> = ({
       {(assessment.eva_readiness || assessment.predictive_runways) && (
         <section
           aria-label="EVA Readiness and Predictive Threshold Runways"
-          className="grid grid-cols-1 xl:grid-cols-12 gap-4"
+          className="grid grid-cols-1 xl:grid-cols-12 gap-5 lg:gap-6"
         >
           {assessment.eva_readiness && (
-            <div className="xl:col-span-5 mc-card p-5 space-y-3 flex flex-col justify-between">
+            <div className="xl:col-span-5 mc-card p-5 lg:p-6 space-y-4 flex flex-col justify-between">
               <div className="space-y-2.5">
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <h2 className="text-lg font-semibold text-[#FAF9FA]">
                     Autonomous EVA Readiness
                   </h2>
                   <span
-                    className={`px-3 py-1 rounded-full text-xs font-bold border ${
-                      assessment.eva_readiness.status === 'HOLD'
-                        ? 'bg-red-500/20 text-red-200 border-red-400/50'
-                        : assessment.eva_readiness.status === 'CAUTION'
-                          ? 'bg-amber-500/20 text-amber-200 border-amber-400/50'
-                          : 'bg-emerald-500/20 text-emerald-200 border-emerald-400/50'
-                    }`}
+                    className={`px-3 py-1 rounded-full text-xs font-bold border ${assessment.eva_readiness.status === 'HOLD'
+                      ? 'bg-red-500/20 text-red-200 border-red-400/50'
+                      : assessment.eva_readiness.status === 'CAUTION'
+                        ? 'bg-amber-500/20 text-amber-200 border-amber-400/50'
+                        : 'bg-emerald-500/20 text-emerald-200 border-emerald-400/50'
+                      }`}
                   >
                     {assessment.eva_readiness.status} · {assessment.eva_readiness.score_pct}%
                   </span>
@@ -368,16 +380,16 @@ export const MissionOverviewView: React.FC<MissionOverviewViewProps> = ({
                   </div>
                 )}
 
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5 pt-1">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 pt-1">
                   {assessment.eva_readiness.pre_eva_checklist.slice(0, 4).map((ck) => (
                     <div
                       key={ck.item}
-                      className="rounded-lg bg-[#0B0D1A] px-2.5 py-2 border border-white/[0.06] flex items-center gap-2 text-xs"
+                      className="rounded-lg bg-[#0B0D1A] px-3 py-2.5 border border-white/[0.06] flex items-start gap-2 text-xs"
                     >
                       <CheckCircle2
-                        className={`w-3.5 h-3.5 shrink-0 ${ck.ok ? 'text-emerald-400' : 'text-amber-300'}`}
+                        className={`w-3.5 h-3.5 shrink-0 mt-0.5 ${ck.ok ? 'text-emerald-400' : 'text-amber-300'}`}
                       />
-                      <span className="text-[#E5E5E4] truncate" title={ck.detail}>
+                      <span className="text-[#E5E5E4] leading-snug" title={ck.detail}>
                         {ck.item}
                       </span>
                     </div>
@@ -411,7 +423,7 @@ export const MissionOverviewView: React.FC<MissionOverviewViewProps> = ({
           )}
 
           {assessment.predictive_runways && (
-            <div className="xl:col-span-7 mc-card p-5 space-y-3">
+            <div className="xl:col-span-7 mc-card p-5 lg:p-6 space-y-4">
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <h2 className="text-lg font-semibold text-[#FAF9FA] inline-flex items-center gap-2">
                   <TrendingUp className="w-4 h-4 text-[#A5D8FF]" />
@@ -419,52 +431,52 @@ export const MissionOverviewView: React.FC<MissionOverviewViewProps> = ({
                 </h2>
                 <span className="text-xs text-[#A5D8FF]">Local linear projection</span>
               </div>
-              <p className="text-xs text-[#E5E5E4]/75">
+              <p className="text-xs text-[#E5E5E4]/75 leading-relaxed">
                 {assessment.predictive_runways.disclaimer}
               </p>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <div className="rounded-xl bg-[#0B0D1A] p-3.5 border border-white/[0.06] space-y-1">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
+                <div className="rounded-xl bg-[#0B0D1A] p-4 border border-white/[0.06] space-y-1.5">
                   <div className="text-xs font-semibold text-[#A5D8FF]">Cabin CO₂ Slope</div>
                   <div className="text-sm font-bold text-[#FAF9FA] tabular-data">
                     {assessment.predictive_runways.co2.current_mmhg} mmHg (
                     {assessment.predictive_runways.co2.slope_per_sol >= 0 ? '+' : ''}
                     {assessment.predictive_runways.co2.slope_per_sol}/sol)
                   </div>
-                  <p className="text-xs text-[#E5E5E4]/80 leading-snug">
+                  <p className="text-xs text-[#E5E5E4]/80 leading-relaxed">
                     {assessment.predictive_runways.co2.summary}
                   </p>
                 </div>
 
-                <div className="rounded-xl bg-[#0B0D1A] p-3.5 border border-white/[0.06] space-y-1">
+                <div className="rounded-xl bg-[#0B0D1A] p-4 border border-white/[0.06] space-y-1.5">
                   <div className="text-xs font-semibold text-[#A5D8FF]">Cumulative Radiation Runway</div>
                   <div className="text-sm font-bold text-[#FAF9FA] tabular-data">
                     {assessment.predictive_runways.radiation_budget.cumulative_msv} /{' '}
                     {assessment.predictive_runways.radiation_budget.reference_limit_msv} mSv
                   </div>
-                  <p className="text-xs text-[#E5E5E4]/80 leading-snug">
+                  <p className="text-xs text-[#E5E5E4]/80 leading-relaxed">
                     {assessment.predictive_runways.radiation_budget.summary}
                   </p>
                 </div>
 
-                <div className="rounded-xl bg-[#0B0D1A] p-3.5 border border-white/[0.06] space-y-1">
+                <div className="rounded-xl bg-[#0B0D1A] p-4 border border-white/[0.06] space-y-1.5">
                   <div className="text-xs font-semibold text-[#A5D8FF]">7-Sol Sleep Debt Recovery</div>
                   <div className="text-sm font-bold text-[#FAF9FA] tabular-data">
                     {assessment.predictive_runways.sleep_debt.debt_7sol_hrs} hrs deficit ·{' '}
                     {assessment.predictive_runways.sleep_debt.estimated_recovery_nights} recovery nights
                   </div>
-                  <p className="text-xs text-[#E5E5E4]/80 leading-snug">
+                  <p className="text-xs text-[#E5E5E4]/80 leading-relaxed">
                     {assessment.predictive_runways.sleep_debt.summary}
                   </p>
                 </div>
 
-                <div className="rounded-xl bg-[#0B0D1A] p-3.5 border border-white/[0.06] space-y-1">
+                <div className="rounded-xl bg-[#0B0D1A] p-4 border border-white/[0.06] space-y-1.5">
                   <div className="text-xs font-semibold text-[#A5D8FF]">Musculoskeletal Countermeasure</div>
                   <div className="text-sm font-bold text-[#FAF9FA] tabular-data">
                     Strength Index {assessment.predictive_runways.musculoskeletal.current_strength_idx}% (
                     {assessment.predictive_runways.musculoskeletal.slope_per_sol >= 0 ? '+' : ''}
                     {assessment.predictive_runways.musculoskeletal.slope_per_sol}/sol)
                   </div>
-                  <p className="text-xs text-[#E5E5E4]/80 leading-snug">
+                  <p className="text-xs text-[#E5E5E4]/80 leading-relaxed">
                     {assessment.predictive_runways.musculoskeletal.summary}
                   </p>
                 </div>
@@ -476,10 +488,10 @@ export const MissionOverviewView: React.FC<MissionOverviewViewProps> = ({
 
       {/* 3. Latest Vital Signs vs Personal Baseline */}
       <section aria-label="Latest Vital Signs">
-        <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
+        <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
           <div>
             <h2 className="text-xl font-semibold text-[#FAF9FA]">Vital Signs vs. Personal Baseline</h2>
-            <p className="text-sm text-[#E5E5E4]/75">
+            <p className="text-sm text-[#E5E5E4]/75 mt-1">
               Compares readings against {astronaut.name}&apos;s individual mission baseline rather than universal Earth reference ranges. Tap any card to focus its body system.
             </p>
           </div>
@@ -489,12 +501,12 @@ export const MissionOverviewView: React.FC<MissionOverviewViewProps> = ({
           </span>
         </div>
 
-        <div className="mb-3.5 rounded-2xl bg-[#121522] border border-[#A5D8FF]/20 px-4 py-3 text-xs text-[#E5E5E4]/85 leading-relaxed">
+        <div className="mb-4 rounded-2xl bg-[#121522] border border-[#A5D8FF]/20 px-4 py-3.5 text-xs text-[#E5E5E4]/85 leading-relaxed">
           <span className="font-semibold text-[#A5D8FF]">Baseline Recommendation: </span>
           Avoid arbitrary thresholds or assuming that ordinary Earth-based clinical reference ranges automatically represent safe operating limits under current {gravityRegimeLabel(latest.gravity_g)} conditions. Status flags measure relative drift from personal mission baselines alongside mission-configured prototype safety rules.
         </div>
 
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-3.5">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-6 gap-4">
           {vitalCards.map((vc) => {
             const Icon = vc.icon;
             const flagMeta = statusMeta(vc.flag);
@@ -503,7 +515,7 @@ export const MissionOverviewView: React.FC<MissionOverviewViewProps> = ({
                 key={vc.title}
                 type="button"
                 onClick={() => onSelectRegion(vc.regionId)}
-                className="mc-card p-4 text-left hover:border-[#A5D8FF]/45 transition-colors flex flex-col justify-between gap-3"
+                className="mc-card p-5 text-left hover:border-[#A5D8FF]/45 transition-colors flex flex-col justify-between gap-3.5"
               >
                 <div className="flex items-center justify-between gap-2">
                   <span className="text-sm font-medium text-[#E5E5E4] flex items-center gap-1.5">
@@ -516,7 +528,7 @@ export const MissionOverviewView: React.FC<MissionOverviewViewProps> = ({
                   <span className="text-2xl font-bold text-[#FAF9FA]">{vc.value}</span>
                   <span className="text-xs text-[#E5E5E4]/75 ml-1">{vc.unit}</span>
                 </div>
-                <div className="text-xs text-[#A5D8FF]/90 leading-snug">{vc.baseline}</div>
+                <div className="text-xs text-[#A5D8FF]/90 leading-relaxed">{vc.baseline}</div>
               </button>
             );
           })}
@@ -525,16 +537,16 @@ export const MissionOverviewView: React.FC<MissionOverviewViewProps> = ({
 
       {/* 4. Five Spaceflight Hazard Overview Cards */}
       <section aria-label="Five Spaceflight Hazards Overview">
-        <div className="flex items-center justify-between gap-2 mb-3.5">
+        <div className="flex items-center justify-between gap-2 mb-4">
           <div>
             <h2 className="text-xl font-semibold text-[#FAF9FA]">Five Spaceflight Hazards</h2>
-            <p className="text-sm text-[#E5E5E4]/75">
+            <p className="text-sm text-[#E5E5E4]/75 mt-1">
               Open any hazard module to inspect monitoring data, spaceflight effects, and guided actions.
             </p>
           </div>
         </div>
 
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3.5">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-4">
           {hazardSummaryCards.map((hc) => {
             const meta = statusMeta(hc.status);
             return (
@@ -542,7 +554,7 @@ export const MissionOverviewView: React.FC<MissionOverviewViewProps> = ({
                 key={hc.id}
                 type="button"
                 onClick={() => onOpenHazard(hc.id)}
-                className="mc-card p-4 text-left hover:border-[#A5D8FF]/45 transition-colors flex flex-col justify-between gap-3"
+                className="mc-card p-5 text-left hover:border-[#A5D8FF]/45 transition-colors flex flex-col justify-between gap-3.5"
               >
                 <div className="flex items-start justify-between gap-2">
                   <span className="text-sm font-semibold text-[#FAF9FA] leading-snug">{hc.name}</span>
@@ -552,9 +564,9 @@ export const MissionOverviewView: React.FC<MissionOverviewViewProps> = ({
                 </div>
                 <div>
                   <div className="text-base font-bold text-[#FAF9FA] tabular-data">{hc.metric}</div>
-                  <div className="text-xs text-[#E5E5E4]/75 mt-0.5">{hc.sub}</div>
+                  <div className="text-xs text-[#E5E5E4]/75 mt-1">{hc.sub}</div>
                 </div>
-                <div className="flex items-center justify-between text-xs font-medium text-[#A5D8FF] pt-1 border-t border-white/[0.06]">
+                <div className="flex items-center justify-between text-xs font-medium text-[#A5D8FF] pt-2 border-t border-white/[0.06]">
                   <span>Open module</span>
                   <ChevronRight className="w-3.5 h-3.5" />
                 </div>
@@ -565,7 +577,7 @@ export const MissionOverviewView: React.FC<MissionOverviewViewProps> = ({
       </section>
 
       {/* 5. Interactive Health Trends (7, 14, or 30 Mission Days) + Important Alerts */}
-      <section className="grid grid-cols-1 xl:grid-cols-[1.45fr_1fr] gap-5">
+      <section className="grid grid-cols-1 xl:grid-cols-[1.45fr_1fr] gap-6">
         {/* Left: Interactive 7 / 14 / 30 Sol Trends Chart */}
         <div className="mc-card p-5 lg:p-6">
           <div className="flex flex-wrap items-center justify-between gap-3 mb-5">
@@ -714,11 +726,11 @@ export const MissionOverviewView: React.FC<MissionOverviewViewProps> = ({
                 No threshold warnings active. All monitored systems are operating calmly within personal mission baselines.
               </div>
             ) : (
-              <div className="space-y-2.5">
+              <div className="space-y-3">
                 {assessment.active_alerts.map((al) => {
                   const meta = statusMeta(al.severity);
                   return (
-                    <div key={al.id} className="rounded-xl bg-[#0B0D1A] p-3.5 space-y-1.5">
+                    <div key={al.id} className="rounded-xl bg-[#0B0D1A] p-4 space-y-2">
                       <div className="flex items-center justify-between gap-2">
                         <span className="text-sm font-semibold text-[#FAF9FA] flex items-center gap-1.5">
                           <AlertTriangle className={`w-4 h-4 ${meta.textClass}`} />
@@ -792,25 +804,25 @@ export const MissionOverviewView: React.FC<MissionOverviewViewProps> = ({
       </section>
 
       {/* Quick-Access Support Modules: Food & Supplies, Distance from Earth, Personal Companion & Journal */}
-      <section className="grid grid-cols-1 md:grid-cols-3 gap-4">
-        <div className="mc-card p-5 flex flex-col justify-between space-y-3">
-          <div>
-            <div className="flex items-center justify-between gap-2 mb-1">
+      <section className="grid grid-cols-1 lg:grid-cols-3 gap-5">
+        <div className="mc-card p-5 lg:p-6 flex flex-col justify-between space-y-4">
+          <div className="space-y-2">
+            <div className="flex flex-wrap items-start justify-between gap-2">
               <h3 className="text-base font-semibold text-[#FAF9FA]">
                 Food &amp; Life-Support Supplies
               </h3>
-              <span className="mc-pill bg-emerald-500/15 text-emerald-300 border border-emerald-500/30">
+              <span className="mc-pill shrink-0 bg-emerald-500/15 text-emerald-300 border border-emerald-500/30">
                 ~{state.food_state?.summary.estimated_meal_supply_days ?? 64.6} Sols Projected
               </span>
             </div>
-            <p className="text-xs text-[#E5E5E4]/85">
+            <p className="text-xs text-[#E5E5E4]/85 leading-relaxed">
               {state.food_state?.summary.available_meal_portions ?? 975} primary meal portions ·{' '}
               {state.food_state?.summary.potable_water_liters ?? 840} L water ·{' '}
               {state.food_state?.summary.low_stock_count ?? 1} low stock ·{' '}
               {state.food_state?.summary.expiring_soon_count ?? 2} expiring soon.
             </p>
           </div>
-          <div className="flex items-center justify-between pt-2 border-t border-white/[0.06] text-xs">
+          <div className="flex items-center justify-between gap-3 pt-3 border-t border-white/[0.06] text-xs">
             <span className="text-[#8E95A8]">
               Sol {latest.mission_day}: {state.food_state?.summary.daily_food_consumption_kcal?.toFixed(0) ?? 1305} kcal logged
             </span>
@@ -818,7 +830,7 @@ export const MissionOverviewView: React.FC<MissionOverviewViewProps> = ({
               <button
                 type="button"
                 onClick={onOpenFoodSupplies}
-                className="mc-btn-secondary px-3 py-1.5 text-xs inline-flex items-center gap-1"
+                className="mc-btn-secondary px-3.5 py-2 text-xs inline-flex items-center gap-1 shrink-0"
               >
                 <span>Open Food &amp; Supplies</span>
                 <ChevronRight className="w-3.5 h-3.5" />
@@ -827,26 +839,26 @@ export const MissionOverviewView: React.FC<MissionOverviewViewProps> = ({
           </div>
         </div>
 
-        <div className="mc-card p-5 flex flex-col justify-between space-y-3">
-          <div>
-            <div className="flex items-center justify-between gap-2 mb-1">
+        <div className="mc-card p-5 lg:p-6 flex flex-col justify-between space-y-4">
+          <div className="space-y-2">
+            <div className="flex flex-wrap items-start justify-between gap-2">
               <h3 className="text-base font-semibold text-[#FAF9FA]">
                 Distance from Earth &amp; Message Centre
               </h3>
-              <span className="mc-pill bg-[#A5D8FF]/15 text-[#A5D8FF] border border-[#A5D8FF]/30">
+              <span className="mc-pill shrink-0 bg-[#A5D8FF]/15 text-[#A5D8FF] border border-[#A5D8FF]/30">
                 {state.comm_centre_state?.one_way_delay_minutes ?? state.comm_state.one_way_delay_minutes}m OW /{' '}
                 {state.comm_centre_state?.round_trip_delay_minutes ??
                   Number((state.comm_state.one_way_delay_minutes * 2).toFixed(1))}
                 m RT
               </span>
             </div>
-            <p className="text-xs text-[#E5E5E4]/85">
+            <p className="text-xs text-[#E5E5E4]/85 leading-relaxed">
               {state.comm_centre_state?.distance_million_km ?? state.comm_state.distance_million_km}M km from Earth ·{' '}
               {state.comm_centre_state?.pending_messages_count ?? 1} pending message(s) ·{' '}
               {state.comm_centre_state?.unsent_health_reports_count ?? state.comm_state.pending_reports_count} unsent report(s).
             </p>
           </div>
-          <div className="flex items-center justify-between pt-2 border-t border-white/[0.06] text-xs">
+          <div className="flex items-center justify-between gap-3 pt-3 border-t border-white/[0.06] text-xs">
             <span className="text-[#8E95A8]">
               Mode: {state.comm_centre_state?.comm_condition ?? 'DELAYED'}
             </span>
@@ -854,7 +866,7 @@ export const MissionOverviewView: React.FC<MissionOverviewViewProps> = ({
               <button
                 type="button"
                 onClick={onOpenCommCentre}
-                className="mc-btn-secondary px-3 py-1.5 text-xs inline-flex items-center gap-1"
+                className="mc-btn-secondary px-3.5 py-2 text-xs inline-flex items-center gap-1 shrink-0"
               >
                 <span>Open Message Centre</span>
                 <ChevronRight className="w-3.5 h-3.5" />
@@ -863,26 +875,26 @@ export const MissionOverviewView: React.FC<MissionOverviewViewProps> = ({
           </div>
         </div>
 
-        <div className="mc-card p-5 flex flex-col justify-between space-y-3">
-          <div>
-            <div className="flex items-center justify-between gap-2 mb-1">
+        <div className="mc-card p-5 lg:p-6 flex flex-col justify-between space-y-4">
+          <div className="space-y-2">
+            <div className="flex flex-wrap items-start justify-between gap-2">
               <h3 className="text-base font-semibold text-[#FAF9FA]">
                 TARSCARE Personal Companion
               </h3>
-              <span className="mc-pill bg-emerald-500/15 text-emerald-300 border border-emerald-500/30">
+              <span className="mc-pill shrink-0 bg-emerald-500/15 text-emerald-300 border border-emerald-500/30">
                 Always Here, Offline
               </span>
             </div>
-            <p className="text-xs text-[#E5E5E4]/85">
+            <p className="text-xs text-[#E5E5E4]/85 leading-relaxed">
               Private personal journal ({state.companion_state?.journal_entries.length ?? 3} entries), self-reported mood check-ins, and empathetic onboard AI companion.
             </p>
           </div>
-          <div className="flex items-center justify-end gap-2 pt-2 border-t border-white/[0.06] text-xs">
+          <div className="flex items-center justify-end gap-2.5 pt-3 border-t border-white/[0.06] text-xs">
             {onOpenJournal && (
               <button
                 type="button"
                 onClick={onOpenJournal}
-                className="mc-btn-secondary px-3 py-1.5 text-xs"
+                className="mc-btn-secondary px-3.5 py-2 text-xs"
               >
                 My Journal
               </button>
@@ -891,7 +903,7 @@ export const MissionOverviewView: React.FC<MissionOverviewViewProps> = ({
               <button
                 type="button"
                 onClick={onOpenCompanion}
-                className="mc-btn-primary px-3 py-1.5 text-xs inline-flex items-center gap-1"
+                className="mc-btn-primary px-3.5 py-2 text-xs inline-flex items-center gap-1"
               >
                 <span>Open Companion</span>
                 <ChevronRight className="w-3.5 h-3.5" />

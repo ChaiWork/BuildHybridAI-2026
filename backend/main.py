@@ -6,7 +6,13 @@ Store-and-Forward Earth Telemetry Queue, and Local NASA/CSA RAG Retrieval Engine
 
 from __future__ import annotations
 import os
+import sys
+import threading
 from contextlib import asynccontextmanager
+
+_BACKEND_DIR = os.path.dirname(os.path.abspath(__file__))
+if _BACKEND_DIR not in sys.path:
+    sys.path.insert(0, _BACKEND_DIR)
 from datetime import datetime, timezone
 from typing import Dict, Any, Optional, List
 from fastapi import FastAPI, HTTPException
@@ -89,10 +95,26 @@ from mission_ops import (
 from dataclasses import asdict
 
 
+_DB_INIT_LOCK = threading.Lock()
+_VERIFIED_DB_PATHS: set[str] = set()
+
+
+def _ensure_db_initialized() -> None:
+    current_path = database.DB_PATH
+    if current_path in _VERIFIED_DB_PATHS and os.path.exists(current_path) and os.path.getsize(current_path) > 0:
+        return
+    with _DB_INIT_LOCK:
+        current_path = database.DB_PATH
+        if current_path in _VERIFIED_DB_PATHS and os.path.exists(current_path) and os.path.getsize(current_path) > 0:
+            return
+        init_db()
+        _VERIFIED_DB_PATHS.add(current_path)
+
+
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
-    init_db()
-    if not os.environ.get("PYTEST_CURRENT_TEST"):
+    _ensure_db_initialized()
+    if not os.environ.get("PYTEST_CURRENT_TEST") and not os.environ.get("VERCEL"):
         trigger_background_auto_sync(max_age_hours=6.0)
         trigger_background_insight_auto_sync(max_age_hours=12.0)
     yield
@@ -104,6 +126,12 @@ app = FastAPI(
     version="1.0.0",
     lifespan=lifespan,
 )
+
+
+@app.middleware("http")
+async def ensure_serverless_db_ready(request, call_next):
+    _ensure_db_initialized()
+    return await call_next(request)
 
 app.add_middleware(
     CORSMiddleware,
@@ -826,9 +854,10 @@ def update_configured_limits(payload: ConfigLimitsUpdate) -> Dict[str, Any]:
 
 @app.post("/api/reset")
 def reset_demo_database() -> Dict[str, Any]:
+    _VERIFIED_DB_PATHS.discard(database.DB_PATH)
     if os.path.exists(database.DB_PATH):
         os.remove(database.DB_PATH)
-    init_db()
+    _ensure_db_initialized()
     return _build_full_state()
 
 

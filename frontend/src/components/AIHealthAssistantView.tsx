@@ -1,8 +1,9 @@
 import React, { useEffect, useState } from 'react';
-import { AlertTriangle, BookOpen, Cpu, ExternalLink, RefreshCw, Send, Sparkles } from 'lucide-react';
+import { AlertTriangle, BookOpen, ExternalLink, Send, Sparkles } from 'lucide-react';
 import { FullSystemState, KnowledgeDocItem, RAGAnalysisResponse } from '../types';
+import { AIProviderSwitcher } from './AIProviderSwitcher';
 import { OfflineDocModal } from './OfflineDocModal';
-import { apiRequest, updateLocalAIConfig, warmupLocalAI } from './uiHelpers';
+import { apiRequest } from './uiHelpers';
 
 interface AIHealthAssistantViewProps {
   state: FullSystemState;
@@ -31,7 +32,6 @@ export const AIHealthAssistantView: React.FC<AIHealthAssistantViewProps> = ({
   const [question, setQuestion] = useState('');
   const [hazardFilter, setHazardFilter] = useState<string>('');
   const [loading, setLoading] = useState(false);
-  const [aiBusy, setAiBusy] = useState(false);
   const [aiNotice, setAiNotice] = useState<string | null>(null);
   const [selectedDoc, setSelectedDoc] = useState<{ doc: KnowledgeDocItem; excerpt?: string } | null>(null);
   const [turns, setTurns] = useState<ChatTurn[]>([
@@ -111,53 +111,6 @@ export const AIHealthAssistantView: React.FC<AIHealthAssistantViewProps> = ({
   }, [initialPrompt]);
 
   const aiStatus = state.local_ai_status;
-  const chatModels = aiStatus?.installed_chat_models || (aiStatus?.ollama_model ? [aiStatus.ollama_model] : []);
-  const llmEnabled = aiStatus?.llm_enabled ?? true;
-  const llmActive = Boolean(aiStatus?.ollama_available && llmEnabled);
-
-  const handleModelChange = async (modelName: string) => {
-    setAiBusy(true);
-    setAiNotice(null);
-    try {
-      await updateLocalAIConfig({ selected_model: modelName }, onStateUpdated);
-      setAiNotice(`Active local Ollama model switched to ${modelName}.`);
-    } catch (err) {
-      setAiNotice(err instanceof Error ? err.message : 'Unable to switch Ollama model.');
-    } finally {
-      setAiBusy(false);
-    }
-  };
-
-  const handleToggleLLM = async () => {
-    setAiBusy(true);
-    setAiNotice(null);
-    try {
-      const nextEnabled = !llmEnabled;
-      await updateLocalAIConfig({ llm_enabled: nextEnabled }, onStateUpdated);
-      setAiNotice(
-        nextEnabled
-          ? 'Local Ollama synthesis enabled alongside retrieved NASA/CSA evidence.'
-          : 'Deterministic offline RAG mode enabled (local LLM synthesis paused).',
-      );
-    } catch (err) {
-      setAiNotice(err instanceof Error ? err.message : 'Unable to update AI synthesis mode.');
-    } finally {
-      setAiBusy(false);
-    }
-  };
-
-  const handleWarmup = async () => {
-    setAiBusy(true);
-    setAiNotice(null);
-    try {
-      const res = await warmupLocalAI(aiStatus?.ollama_model, onStateUpdated);
-      setAiNotice(res.message);
-    } catch (err) {
-      setAiNotice(err instanceof Error ? err.message : 'Warmup request failed.');
-    } finally {
-      setAiBusy(false);
-    }
-  };
 
   return (
     <div className="grid grid-cols-1 xl:grid-cols-[1.55fr_1fr] gap-6 items-start">
@@ -169,67 +122,17 @@ export const AIHealthAssistantView: React.FC<AIHealthAssistantViewProps> = ({
             <div>
               <h1 className="text-xl font-bold text-[#FAF9FA]">TARS Care Health Assistant</h1>
               <p className="text-xs text-[#E5E5E4]/75">
-                Offline-first companion backed by NASA HRP, OSDR, RadLab, NLSP, EDA &amp; CSA research
+                Grounded in NASA HRP, OSDR, RadLab, NLSP, EDA &amp; CSA research · supports Local LLM &amp; Groq API
               </p>
             </div>
           </div>
 
-          <div className="flex flex-wrap items-center gap-2">
-            {aiStatus?.ollama_available && chatModels.length > 0 && (
-              <select
-                id="ai-chat-model-select"
-                name="ollama_chat_model"
-                value={aiStatus.ollama_model || chatModels[0]}
-                onChange={(e) => handleModelChange(e.target.value)}
-                disabled={aiBusy}
-                aria-label="Select local Ollama model"
-                className="rounded-full bg-[#0B0D1A] border border-white/15 px-3 py-1.5 text-xs text-[#FAF9FA] focus:border-[#A5D8FF] focus:outline-none"
-              >
-                {chatModels.map((m) => (
-                  <option key={m} value={m}>
-                    {m}
-                  </option>
-                ))}
-              </select>
-            )}
-
-            {aiStatus?.ollama_available && (
-              <>
-                <button
-                  type="button"
-                  disabled={aiBusy}
-                  onClick={handleToggleLLM}
-                  className={`px-3 py-1.5 rounded-full text-xs font-medium border transition-colors ${
-                    llmActive
-                      ? 'bg-[#A5D8FF]/15 border-[#A5D8FF]/45 text-[#A5D8FF]'
-                      : 'bg-[#0B0D1A] border-white/15 text-[#E5E5E4]/85 hover:border-[#A5D8FF]/40'
-                  }`}
-                >
-                  {llmActive ? 'Local LLM: On' : 'Local LLM: Off'}
-                </button>
-                <button
-                  type="button"
-                  disabled={aiBusy}
-                  onClick={handleWarmup}
-                  className="px-3 py-1.5 rounded-full bg-[#0B0D1A] border border-white/15 text-xs text-[#E5E5E4] hover:border-[#A5D8FF]/45 inline-flex items-center gap-1.5"
-                >
-                  <RefreshCw className={`w-3 h-3 ${aiBusy ? 'animate-spin' : ''}`} />
-                  <span>Warm Up</span>
-                </button>
-              </>
-            )}
-
-            <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-[#0B0D1A] border border-[#A5D8FF]/30 text-xs text-[#A5D8FF]">
-              <Cpu className="w-3.5 h-3.5" />
-              <span>
-                {llmActive
-                  ? `Local Ollama (${aiStatus?.ollama_model})`
-                  : aiStatus?.sentence_transformers_cached
-                    ? 'Offline Semantic RAG'
-                    : 'Deterministic Offline RAG'}
-              </span>
-            </div>
-          </div>
+          <AIProviderSwitcher
+            aiStatus={aiStatus}
+            variant="toolbar"
+            onStateUpdated={onStateUpdated}
+            onNotice={setAiNotice}
+          />
         </div>
 
         {aiNotice && (

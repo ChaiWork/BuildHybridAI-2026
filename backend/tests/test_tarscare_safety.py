@@ -1565,5 +1565,105 @@ def test_part3_and_4_personal_journal_ai_companion_privacy_and_five_hazard_integ
         assert "summary" in five_hz[hz_key]
 
 
+def test_dual_llm_provider_switching_and_groq_key_redaction(client, monkeypatch):
+    """Switching between Local LLM and Groq API LLM persists cleanly, selects qwen/qwen3.8-27b, never exposes raw keys, and blocks API calls during OFFLINE blackout."""
+    import io
+    import json
+    import urllib.request
+
+    # Configure a test key via /api/ai/config and verify it is never leaked raw in responses
+    res_set = client.post(
+        "/api/ai/config",
+        json={
+            "llm_enabled": True,
+            "llm_provider": "api",
+            "selected_api_model": "qwen/qwen3.8-27b",
+            "groq_api_key": "gsk_test_secret_1234567890_abcd",
+        },
+    )
+    assert res_set.status_code == 200
+    status = res_set.json()
+    assert status["llm_provider"] == "api"
+    assert status["api_model"] == "qwen/qwen3.8-27b"
+    assert status["api_key_configured"] is True
+    assert "gsk_test_secret_1234567890_abcd" not in json.dumps(status)
+    assert "qwen/qwen3.8-27b" in status["available_api_models"]
+    assert "openai/gpt-oss-120b" in status["available_api_models"]
+
+    # Ensure invalid provider is rejected cleanly
+    bad_prov = client.post("/api/ai/config", json={"llm_provider": "invalid_provider"})
+    assert bad_prov.status_code == 400
+
+    # Ensure DELAYED comm allows Groq synthesis cleanly (mocked HTTP)
+    assert client.post("/api/comm/mode", json={"mode": "DELAYED"}).status_code == 200
+
+    class _FakeResp(io.BytesIO):
+        def __enter__(self):
+            return self
+        def __exit__(self, *args):
+            return False
+
+    seen_urls = []
+
+    def _fake_urlopen(req, timeout=25.0):
+        url = req.full_url if hasattr(req, "full_url") else str(req)
+        seen_urls.append(url)
+        if "11434" in url:
+            raise OSError("Ollama offline in test")
+        payload = {
+            "model": "qwen/qwen3.8-27b",
+            "choices": [
+                {
+                    "message": {
+                        "content": (
+                            "Absorbed dose (Gy / mGy) measures physical energy deposited per unit mass, "
+                            "whereas equivalent dose (Sv / mSv) weights biological damage risk [NASA-RADLAB-01]."
+                        )
+                    }
+                }
+            ],
+        }
+        return _FakeResp(json.dumps(payload).encode("utf-8"))
+
+    monkeypatch.setattr(urllib.request, "urlopen", _fake_urlopen)
+
+    rag_api = client.post(
+        "/api/rag/query",
+        json={"question": "Distinguish Gy from Sv for Mars dosimetry.", "include_astronaut_context": True},
+    )
+    assert rag_api.status_code == 200
+    rag_body = rag_api.json()
+    assert rag_body["engine_mode"].startswith("GROQ_API")
+    assert rag_body["model_used"] == "qwen/qwen3.8-27b"
+    assert any("api.groq.com" in u for u in seen_urls)
+
+    # Switch to Local LLM mode -> must NEVER touch api.groq.com
+    seen_urls.clear()
+    res_local = client.post("/api/ai/config", json={"llm_provider": "local", "llm_enabled": True})
+    assert res_local.status_code == 200
+    assert res_local.json()["llm_provider"] == "local"
+
+    rag_local = client.post(
+        "/api/rag/query",
+        json={"question": "Distinguish Gy from Sv for Mars dosimetry.", "include_astronaut_context": True},
+    )
+    assert rag_local.status_code == 200
+    assert not rag_local.json()["engine_mode"].startswith("GROQ_API")
+    assert not any("api.groq.com" in u for u in seen_urls)
+
+    # Switch back to API LLM, then trigger OFFLINE blackout -> must block Groq cloud call cleanly
+    client.post("/api/ai/config", json={"llm_provider": "api", "llm_enabled": True})
+    assert client.post("/api/comm/mode", json={"mode": "OFFLINE"}).status_code == 200
+    seen_urls.clear()
+    rag_blackout = client.post(
+        "/api/rag/query",
+        json={"question": "Distinguish Gy from Sv for Mars dosimetry.", "include_astronaut_context": True},
+    )
+    assert rag_blackout.status_code == 200
+    assert not rag_blackout.json()["engine_mode"].startswith("GROQ_API")
+    assert not any("api.groq.com" in u for u in seen_urls)
+
+
+
 
 

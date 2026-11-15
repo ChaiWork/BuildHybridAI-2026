@@ -2,18 +2,32 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Activity,
   AlertTriangle,
+  BookOpen,
+  Bot,
   CheckCircle2,
   Clock,
   Contrast,
+  Cpu,
   HeartPulse,
+  HelpCircle,
+  History,
+  LayoutDashboard,
+  LucideIcon,
+  Menu,
+  MessageSquareHeart,
   Mic,
   MicOff,
+  Package,
+  PanelLeftClose,
+  PanelLeftOpen,
+  Radiation,
   Radio,
   RotateCcw,
   ShieldAlert,
   SlidersHorizontal,
   Sparkles,
   Square,
+  Stethoscope,
   Users,
   Volume2,
   Wifi,
@@ -50,6 +64,8 @@ import {
 } from './components/HealthHistoryAndCommViews';
 import { FoodSuppliesView } from './components/FoodSuppliesView';
 import { PersonalCompanionView } from './components/PersonalCompanionView';
+import { AIProviderSwitcher } from './components/AIProviderSwitcher';
+import { GuideSection, HealthGuideModal } from './components/HealthGuideModal';
 
 type NavTab =
   | 'overview'
@@ -64,24 +80,41 @@ type NavTab =
   | 'history'
   | 'comm';
 
-const NAV_ITEMS: { id: NavTab; label: string }[] = [
-  { id: 'overview', label: 'Mission Overview' },
-  { id: 'assessment', label: 'Health Assessment' },
-  { id: 'food', label: 'Food & Supplies' },
-  { id: 'comm', label: 'Distance from Earth' },
-  { id: 'companion', label: 'Personal Companion' },
-  { id: 'journal', label: 'My Journal' },
-  { id: 'devices', label: 'Medical Devices' },
-  { id: 'hazards', label: 'Spaceflight Hazards' },
-  { id: 'ops', label: 'Crew & Med Ops' },
-  { id: 'assistant', label: 'AI Health Assistant' },
-  { id: 'history', label: 'Health History' },
+type NavGroupId = 'monitoring' | 'operations' | 'companion';
+
+interface NavItem {
+  id: NavTab;
+  label: string;
+  group: NavGroupId;
+  icon: LucideIcon;
+}
+
+const NAV_GROUPS: { id: NavGroupId; label: string }[] = [
+  { id: 'monitoring', label: 'Health & Monitoring' },
+  { id: 'operations', label: 'Mission & Operations' },
+  { id: 'companion', label: 'AI & Personal' },
+];
+
+const NAV_ITEMS: NavItem[] = [
+  { id: 'overview', label: 'Mission Overview', group: 'monitoring', icon: LayoutDashboard },
+  { id: 'assessment', label: 'Health Assessment', group: 'monitoring', icon: Stethoscope },
+  { id: 'hazards', label: 'Spaceflight Hazards', group: 'monitoring', icon: Radiation },
+  { id: 'devices', label: 'Medical Devices', group: 'monitoring', icon: Cpu },
+  { id: 'history', label: 'Health History', group: 'monitoring', icon: History },
+  { id: 'food', label: 'Food & Supplies', group: 'operations', icon: Package },
+  { id: 'comm', label: 'Distance from Earth', group: 'operations', icon: Radio },
+  { id: 'ops', label: 'Crew & Med Ops', group: 'operations', icon: Users },
+  { id: 'assistant', label: 'AI Health Assistant', group: 'companion', icon: Bot },
+  { id: 'companion', label: 'Personal Companion', group: 'companion', icon: MessageSquareHeart },
+  { id: 'journal', label: 'My Journal', group: 'companion', icon: BookOpen },
 ];
 
 export default function App() {
   const [state, setState] = useState<FullSystemState | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<NavTab>('overview');
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [selectedRegionId, setSelectedRegionId] = useState<string>('heart');
   const [activeHazardId, setActiveHazardId] = useState<string>('radiation');
   const [assistantSeedPrompt, setAssistantSeedPrompt] = useState<string | undefined>(undefined);
@@ -108,8 +141,9 @@ export default function App() {
   const [voiceStatusMsg, setVoiceStatusMsg] = useState<string | null>(null);
   const voiceStopRef = useRef<(() => void) | null>(null);
 
-  // Baseline Calibration & Reset Confirmation Modals
+  // Baseline Calibration, Health Guide & Reset Confirmation Modals
   const [baselineOpen, setBaselineOpen] = useState(false);
+  const [guideModal, setGuideModal] = useState<{ section: GuideSection; stepId?: string } | null>(null);
   const [resetConfirmOpen, setResetConfirmOpen] = useState(false);
   const [resetLoading, setResetLoading] = useState(false);
   const donkiAutoSyncRef = useRef(false);
@@ -374,16 +408,17 @@ export default function App() {
   };
 
   useEffect(() => {
-    if (!emergencyOpen && !resetConfirmOpen) return;
+    if (!emergencyOpen && !resetConfirmOpen && !mobileNavOpen) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
         setEmergencyOpen(false);
         setResetConfirmOpen(false);
+        setMobileNavOpen(false);
       }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [emergencyOpen, resetConfirmOpen]);
+  }, [emergencyOpen, resetConfirmOpen, mobileNavOpen]);
 
   if (!state) {
     return (
@@ -411,32 +446,242 @@ export default function App() {
   const commMode = state.assessment.comm_mode?.mode || 'DELAYED';
   const commLabel = state.assessment.comm_mode?.label || 'Delayed';
   const overallMeta = statusMeta(state.assessment.overall_status);
+  const activeNavItem = NAV_ITEMS.find((item) => item.id === activeTab) || NAV_ITEMS[0];
+  const openGuide = (section: GuideSection = 'walkthrough', stepId?: string) =>
+    setGuideModal({ section, stepId });
+  const currentGuideStepId =
+    activeTab === 'food' || activeTab === 'companion' || activeTab === 'journal'
+      ? 'companion'
+      : activeTab === 'assistant' || activeTab === 'comm'
+        ? 'ai_comm'
+        : activeTab === 'ops' || activeTab === 'history'
+          ? 'overview'
+          : activeTab;
+
+  const renderNavGroups = (collapsed: boolean, onItemSelect?: () => void) => (
+    <div className={collapsed ? 'space-y-3.5' : 'space-y-4'}>
+      {NAV_GROUPS.map((group, groupIndex) => {
+        const groupItems = NAV_ITEMS.filter((item) => item.group === group.id);
+        return (
+          <div
+            key={group.id}
+            className={
+              groupIndex > 0 && collapsed ? 'pt-3 border-t border-white/[0.06]' : undefined
+            }
+          >
+            {!collapsed && (
+              <div className="px-3 pb-1.5 text-xs font-medium text-[#E5E5E4]/45">
+                {group.label}
+              </div>
+            )}
+            <div className="space-y-1">
+              {groupItems.map((item) => {
+                const active = activeTab === item.id;
+                const Icon = item.icon;
+                return (
+                  <button
+                    key={item.id}
+                    type="button"
+                    onClick={() => {
+                      setActiveTab(item.id);
+                      onItemSelect?.();
+                    }}
+                    title={collapsed ? item.label : undefined}
+                    aria-label={collapsed ? item.label : undefined}
+                    aria-current={active ? 'page' : undefined}
+                    className={`w-full flex items-center rounded-xl text-sm font-medium transition-all duration-150 touch-manipulation focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#A5D8FF] ${collapsed ? 'justify-center px-2 py-2' : 'gap-3 px-3.5 py-2'
+                      } ${active
+                        ? 'bg-[#EEF0F6] text-[#040404] font-semibold shadow-sm'
+                        : 'text-[#E5E5E4]/85 hover:bg-white/[0.06] hover:text-[#FAF9FA]'
+                      }`}
+                  >
+                    <Icon
+                      className={`w-4 h-4 shrink-0 ${active ? 'text-[#040404]' : 'text-[#A5D8FF]/85'
+                        }`}
+                    />
+                    {!collapsed && <span className="truncate text-left">{item.label}</span>}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
 
   return (
-    <div className="min-h-screen bg-[#0B0D1A] text-[#FAF9FA] flex flex-col">
-      {/* Main Application Header: Navigation + Astronaut Profile + Mission Day + Comm Status */}
-      <header className="bg-[#0B0D1A] border-b border-white/[0.08]">
-        <div className="max-w-[1440px] mx-auto px-4 sm:px-6 lg:px-8 py-2.5 space-y-2.5">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            {/* Brand */}
-            <div className="flex items-center gap-3">
-              <div
-                className="w-9 h-9 rounded-full bg-[#121522] border border-[#A5D8FF]/45 flex items-center justify-center"
-                style={{ boxShadow: '0 0 18px rgba(165,216,255,0.22)' }}
-              >
-                <Sparkles className="w-4 h-4 text-[#A5D8FF]" />
-              </div>
-              <div>
-                <div className="text-base font-bold tracking-tight text-[#FAF9FA]">TARS Care</div>
-                <div className="text-xs text-[#E5E5E4]/75">
-                  Personal Health Companion in Deep Space
+    <div className="min-h-screen bg-[#0B0D1A] text-[#FAF9FA] flex">
+      {/* Desktop Persistent Left Navigation Sidebar */}
+      <aside
+        aria-label="Primary Sidebar"
+        className={`hidden lg:flex lg:flex-col lg:sticky lg:top-0 lg:h-screen lg:shrink-0 bg-[#101322] border-r border-white/[0.08] transition-[width] duration-200 ease-out ${sidebarCollapsed ? 'lg:w-[80px]' : 'lg:w-[264px]'
+          }`}
+      >
+        <div
+          className={`flex items-center border-b border-white/[0.07] ${sidebarCollapsed ? 'flex-col gap-3 px-3 py-4' : 'justify-between gap-3 px-5 py-4'
+            }`}
+        >
+          <div className="flex items-center gap-3 min-w-0">
+            <div
+              className="w-9 h-9 rounded-full bg-[#121522] border border-[#A5D8FF]/45 flex items-center justify-center shrink-0"
+              style={{ boxShadow: '0 0 18px rgba(165,216,255,0.22)' }}
+            >
+              <Sparkles className="w-4 h-4 text-[#A5D8FF]" />
+            </div>
+            {!sidebarCollapsed && (
+              <div className="min-w-0">
+                <div className="text-base font-bold tracking-tight text-[#FAF9FA] truncate">
+                  TARS Care
                 </div>
+                <div className="text-xs text-[#E5E5E4]/65 truncate">
+                  Deep-Space Health
+                </div>
+              </div>
+            )}
+          </div>
+
+          <button
+            type="button"
+            onClick={() => setSidebarCollapsed((prev) => !prev)}
+            className="p-2 rounded-xl text-[#E5E5E4]/70 hover:text-[#FAF9FA] hover:bg-white/[0.06] transition-colors shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#A5D8FF]"
+            title={sidebarCollapsed ? 'Expand navigation sidebar' : 'Collapse navigation sidebar'}
+            aria-label={sidebarCollapsed ? 'Expand navigation sidebar' : 'Collapse navigation sidebar'}
+            aria-expanded={!sidebarCollapsed}
+          >
+            {sidebarCollapsed ? (
+              <PanelLeftOpen className="w-4 h-4" />
+            ) : (
+              <PanelLeftClose className="w-4 h-4" />
+            )}
+          </button>
+        </div>
+
+        <nav aria-label="Main navigation" className="flex-1 overflow-y-auto px-3.5 py-2.5">
+          {renderNavGroups(sidebarCollapsed)}
+        </nav>
+
+        <div className="border-t border-white/[0.07] px-3.5 py-3 space-y-2.5 text-xs text-[#E5E5E4]/60">
+          <AIProviderSwitcher
+            aiStatus={state.local_ai_status}
+            variant="sidebar"
+            collapsed={sidebarCollapsed}
+            onStateUpdated={setState}
+          />
+          {sidebarCollapsed ? (
+            <div
+              className="text-center tabular-data font-semibold text-[#A5D8FF]"
+              title={`Mission Sol ${state.latest_telemetry.mission_day}`}
+            >
+              S{state.latest_telemetry.mission_day}
+            </div>
+          ) : (
+            <div className="flex items-center justify-between gap-2 px-0.5">
+              <span className="truncate">Autonomous Storage</span>
+              <span className="tabular-data text-[#A5D8FF] font-semibold shrink-0">
+                Sol {state.latest_telemetry.mission_day}
+              </span>
+            </div>
+          )}
+        </div>
+      </aside>
+
+      {/* Mobile & Tablet Left Drawer */}
+      {mobileNavOpen && (
+        <div className="fixed inset-0 z-40 flex lg:hidden">
+          <div
+            aria-hidden="true"
+            onClick={() => setMobileNavOpen(false)}
+            className="fixed inset-0 bg-black/75 backdrop-blur-sm"
+          />
+          <aside
+            role="dialog"
+            aria-modal="true"
+            aria-label="Navigation menu"
+            className="relative z-10 flex flex-col w-[280px] max-w-[85vw] h-full bg-[#101322] border-r border-white/[0.1] shadow-2xl"
+          >
+            <div className="flex items-center justify-between gap-3 px-5 py-4 border-b border-white/[0.07]">
+              <div className="flex items-center gap-3 min-w-0">
+                <div
+                  className="w-9 h-9 rounded-full bg-[#121522] border border-[#A5D8FF]/45 flex items-center justify-center shrink-0"
+                  style={{ boxShadow: '0 0 18px rgba(165,216,255,0.22)' }}
+                >
+                  <Sparkles className="w-4 h-4 text-[#A5D8FF]" />
+                </div>
+                <div className="min-w-0">
+                  <div className="text-base font-bold tracking-tight text-[#FAF9FA] truncate">
+                    TARS Care
+                  </div>
+                  <div className="text-xs text-[#E5E5E4]/65 truncate">
+                    Deep-Space Health
+                  </div>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setMobileNavOpen(false);
+                }}
+                onTouchEnd={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  setMobileNavOpen(false);
+                }}
+                className="min-w-[44px] min-h-[44px] flex items-center justify-center rounded-xl text-[#E5E5E4]/85 hover:text-[#FAF9FA] hover:bg-white/[0.08] touch-manipulation shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#A5D8FF]"
+                aria-label="Close navigation menu"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <nav aria-label="Mobile navigation" className="flex-1 overflow-y-auto px-4 py-4">
+              {renderNavGroups(false, () => setMobileNavOpen(false))}
+            </nav>
+            <div className="border-t border-white/[0.07] px-4 py-3">
+              <AIProviderSwitcher
+                aiStatus={state.local_ai_status}
+                variant="sidebar"
+                onStateUpdated={setState}
+              />
+            </div>
+          </aside>
+        </div>
+      )}
+
+      {/* Right Workspace Column: Top Utility Bar + Scrollable Workspace + Footer */}
+      <div className="flex-1 min-w-0 flex flex-col">
+        <header className="sticky top-0 z-30 bg-[#0B0D1A]/95 backdrop-blur-md border-b border-white/[0.08]">
+          <div className="max-w-[1440px] mx-auto px-4 sm:px-6 lg:px-7 2xl:px-9 py-3 flex flex-wrap xl:flex-nowrap items-center justify-between gap-2.5">
+            {/* Left: Mobile Drawer Trigger + Active Screen Label */}
+            <div className="flex items-center gap-3 min-w-0">
+              <button
+                type="button"
+                onClick={() => setMobileNavOpen(true)}
+                className="lg:hidden min-w-[40px] min-h-[40px] flex items-center justify-center rounded-xl bg-[#121522] border border-white/[0.08] text-[#FAF9FA] hover:border-[#A5D8FF]/45 touch-manipulation focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#A5D8FF]"
+                aria-label="Open navigation menu"
+              >
+                <Menu className="w-4 h-4" />
+              </button>
+              <div className="flex items-center gap-2.5 min-w-0">
+                <activeNavItem.icon className="w-4 h-4 text-[#A5D8FF] shrink-0 hidden sm:block" />
+                <span className="text-base font-semibold tracking-tight text-[#FAF9FA] truncate">
+                  {activeNavItem.label}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => openGuide('walkthrough', currentGuideStepId)}
+                  className="px-2.5 py-1 rounded-full bg-[#121522] border border-white/[0.1] hover:border-[#A5D8FF]/45 text-xs font-medium text-[#A5D8FF] inline-flex items-center gap-1.5 transition-colors shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#A5D8FF]"
+                  title="Open Step-by-Step Astronaut Health Guide & Walkthrough"
+                >
+                  <HelpCircle className="w-3.5 h-3.5 shrink-0" />
+                  <span>Guide</span>
+                </button>
               </div>
             </div>
 
-            {/* Astronaut Profile, Crew Switcher, Mission Day & Communication Status */}
-            <div className="flex flex-wrap items-center gap-2 sm:gap-2.5">
-              <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-[#121522] border border-white/[0.08]">
+            {/* Right: Astronaut Profile, Baseline Calibration & Mission Link / Status Controls */}
+            <div className="flex flex-wrap xl:flex-nowrap items-center gap-2">
+              <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-[#121522] border border-white/[0.08]">
                 <Users className="w-3.5 h-3.5 text-[#A5D8FF] shrink-0" />
                 <label htmlFor="header-crew-select" className="sr-only">
                   Active Crew Member
@@ -448,17 +693,17 @@ export default function App() {
                   disabled={crewSwitching}
                   value={state.active_crew_id || state.astronaut.astronaut_id}
                   onChange={(e) => handleSwitchCrew(e.target.value)}
-                  className="bg-transparent text-xs font-medium text-[#FAF9FA] focus:outline-none cursor-pointer pr-1"
+                  className="bg-transparent text-xs font-medium text-[#FAF9FA] focus:outline-none cursor-pointer pr-1 max-w-[165px] xl:max-w-[180px] 2xl:max-w-[230px] truncate"
                 >
                   {(state.crew_fleet_matrix && state.crew_fleet_matrix.length > 0
                     ? state.crew_fleet_matrix
                     : [
-                        {
-                          crew_id: state.astronaut.astronaut_id,
-                          name: state.astronaut.name,
-                          role: state.astronaut.role,
-                        },
-                      ]
+                      {
+                        crew_id: state.astronaut.astronaut_id,
+                        name: state.astronaut.name,
+                        role: state.astronaut.role,
+                      },
+                    ]
                   ).map((cm) => (
                     <option key={cm.crew_id} value={cm.crew_id} className="bg-[#121522] text-[#FAF9FA]">
                       {cm.name} ({cm.role})
@@ -470,22 +715,23 @@ export default function App() {
               <button
                 type="button"
                 onClick={() => setBaselineOpen(true)}
-                className="px-3.5 py-1.5 rounded-full bg-[#121522] border border-white/[0.08] hover:border-[#A5D8FF]/45 text-xs sm:text-sm text-[#FAF9FA] inline-flex items-center gap-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#A5D8FF]"
+                className="px-3 py-1.5 rounded-full bg-[#121522] border border-white/[0.08] hover:border-[#A5D8FF]/45 text-xs text-[#FAF9FA] inline-flex items-center gap-1.5 whitespace-nowrap shrink-0 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#A5D8FF]"
                 title="Calibrate Astronaut Personal Baseline & Profile"
               >
                 <Activity className="w-3.5 h-3.5 text-[#A5D8FF]" />
-                <span className="font-medium">{state.astronaut.name}</span>
-                <span className="text-[#E5E5E4]/65">·</span>
                 <span className="tabular-data text-[#A5D8FF] font-semibold">
                   Sol {state.latest_telemetry.mission_day}
                 </span>
+                <span className="hidden 2xl:inline text-[#E5E5E4]/80 font-medium">· Baseline</span>
                 <SlidersHorizontal className="w-3.5 h-3.5 text-[#94A3B8]" />
               </button>
+
+              <span aria-hidden="true" className="hidden xl:block h-5 w-px bg-white/[0.1] mx-0.5 shrink-0" />
 
               <button
                 type="button"
                 onClick={() => setActiveTab('comm')}
-                className={`px-3.5 py-1.5 rounded-full text-xs font-semibold inline-flex items-center gap-1.5 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#A5D8FF] ${commMode === 'CONNECTED'
+                className={`px-3 py-1.5 rounded-full text-xs font-semibold inline-flex items-center gap-1.5 whitespace-nowrap shrink-0 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#A5D8FF] ${commMode === 'CONNECTED'
                   ? 'bg-emerald-500/15 text-emerald-300 border border-emerald-500/30'
                   : commMode === 'OFFLINE'
                     ? 'bg-red-500/15 text-red-300 border border-red-500/30'
@@ -503,7 +749,7 @@ export default function App() {
               <button
                 type="button"
                 onClick={() => triggerEmergencyProtocol()}
-                className={`px-3.5 py-1.5 rounded-full text-xs font-semibold inline-flex items-center gap-1.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#A5D8FF] ${overallMeta.badgeClass}`}
+                className={`px-3 py-1.5 rounded-full text-xs font-semibold inline-flex items-center gap-1.5 whitespace-nowrap shrink-0 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#A5D8FF] ${overallMeta.badgeClass}`}
                 title="Open Autonomous Emergency Escalation Checklist"
               >
                 <ShieldAlert className="w-3.5 h-3.5" />
@@ -513,7 +759,7 @@ export default function App() {
               <button
                 type="button"
                 onClick={() => setResetConfirmOpen(true)}
-                className="p-2 rounded-full bg-[#121522] border border-white/[0.08] text-[#E5E5E4]/80 hover:text-[#FAF9FA] hover:border-[#A5D8FF]/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#A5D8FF]"
+                className="p-2 rounded-full bg-[#121522] border border-white/[0.08] text-[#E5E5E4]/80 hover:text-[#FAF9FA] hover:border-[#A5D8FF]/40 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#A5D8FF]"
                 title="Reset Demo Dataset to Sol 155–184 Baseline"
                 aria-label="Reset Demo Dataset"
               >
@@ -521,481 +767,467 @@ export default function App() {
               </button>
             </div>
           </div>
+        </header>
 
-        {/* 7 Main Navigation Items */}
-        <nav aria-label="Main navigation" className="flex items-center gap-2 overflow-x-auto pb-1">
-          {NAV_ITEMS.map((item) => {
-            const active = activeTab === item.id;
-            return (
-              <button
-                key={item.id}
-                type="button"
-                onClick={() => setActiveTab(item.id)}
-                className={`px-4 py-2 rounded-full text-xs sm:text-sm font-medium whitespace-nowrap transition-all duration-150 ${active
-                  ? 'bg-[#EEF0F6] text-[#040404] font-semibold'
-                  : 'bg-[#121522] text-[#E5E5E4] border border-white/[0.06] hover:border-[#A5D8FF]/40 hover:text-[#FAF9FA]'
-                  }`}
-              >
-                {item.label}
-              </button>
-            );
-          })}
-        </nav>
-      </div>
-    </header>
+        {/* Main Content Workspace */}
+        <main className="flex-1 max-w-[1440px] w-full mx-auto px-5 sm:px-8 lg:px-10 py-6 lg:py-8">
+          {activeTab === 'overview' && (
+            <MissionOverviewView
+              state={state}
+              selectedRegionId={selectedRegionId}
+              onSelectRegion={setSelectedRegionId}
+              onStartAssessment={(regionId) => {
+                if (regionId) setSelectedRegionId(regionId);
+                setActiveTab('assessment');
+              }}
+              onOpenHazard={(hazardId) => {
+                setActiveHazardId(hazardId);
+                setActiveTab('hazards');
+              }}
+              onAskAssistant={(prompt) => {
+                setAssistantSeedPrompt(`${prompt} [Sol ${state.latest_telemetry.mission_day}]`);
+                setActiveTab('assistant');
+              }}
+              onOpenEmergency={() => triggerEmergencyProtocol()}
+              onOpenSansModal={() => setSansModalOpen(true)}
+              onOpenOps={() => setActiveTab('ops')}
+              onOpenFoodSupplies={() => setActiveTab('food')}
+              onOpenCommCentre={() => setActiveTab('comm')}
+              onOpenCompanion={() => setActiveTab('companion')}
+              onOpenJournal={() => setActiveTab('journal')}
+              onOpenGuide={(sec, stepId) => openGuide(sec || 'walkthrough', stepId || 'overview')}
+            />
+          )}
 
-    {/* Main Content Workspace */}
-    <main className="flex-1 max-w-[1440px] w-full mx-auto px-4 sm:px-6 lg:px-8 py-3.5">
-      {activeTab === 'overview' && (
-        <MissionOverviewView
-          state={state}
-          selectedRegionId={selectedRegionId}
-          onSelectRegion={setSelectedRegionId}
-          onStartAssessment={(regionId) => {
-            if (regionId) setSelectedRegionId(regionId);
-            setActiveTab('assessment');
-          }}
-          onOpenHazard={(hazardId) => {
-            setActiveHazardId(hazardId);
-            setActiveTab('hazards');
-          }}
-          onAskAssistant={(prompt) => {
-            setAssistantSeedPrompt(`${prompt} [Sol ${state.latest_telemetry.mission_day}]`);
-            setActiveTab('assistant');
-          }}
-          onOpenEmergency={() => triggerEmergencyProtocol()}
-          onOpenSansModal={() => setSansModalOpen(true)}
-          onOpenOps={() => setActiveTab('ops')}
-          onOpenFoodSupplies={() => setActiveTab('food')}
-          onOpenCommCentre={() => setActiveTab('comm')}
-          onOpenCompanion={() => setActiveTab('companion')}
-          onOpenJournal={() => setActiveTab('journal')}
-        />
-      )}
+          {activeTab === 'assessment' && (
+            <HealthAssessmentView
+              state={state}
+              focusedRegionId={selectedRegionId}
+              onStateUpdated={setState}
+              onOpenEmergency={(hz?: string) => triggerEmergencyProtocol(hz)}
+              onOpenSansModal={() => setSansModalOpen(true)}
+              onOpenDevices={(opts) => {
+                setDeviceFocusCategory(opts?.category || 'all');
+                setDeviceFocusId(opts?.deviceId);
+                setActiveTab('devices');
+              }}
+              onOpenGuide={(sec, stepId) => openGuide(sec || 'measure', stepId || 'assessment')}
+            />
+          )}
 
-      {activeTab === 'assessment' && (
-        <HealthAssessmentView
-          state={state}
-          focusedRegionId={selectedRegionId}
-          onStateUpdated={setState}
-          onOpenEmergency={(hz?: string) => triggerEmergencyProtocol(hz)}
-          onOpenSansModal={() => setSansModalOpen(true)}
-          onOpenDevices={(opts) => {
-            setDeviceFocusCategory(opts?.category || 'all');
-            setDeviceFocusId(opts?.deviceId);
-            setActiveTab('devices');
-          }}
-        />
-      )}
+          {activeTab === 'food' && (
+            <FoodSuppliesView
+              state={state}
+              apiBase=""
+              onStateUpdate={setState}
+              onNavigate={(tab) => setActiveTab(tab as NavTab)}
+            />
+          )}
 
-      {activeTab === 'food' && (
-        <FoodSuppliesView
-          state={state}
-          apiBase=""
-          onStateUpdate={setState}
-          onNavigate={(tab) => setActiveTab(tab as NavTab)}
-        />
-      )}
+          {activeTab === 'companion' && (
+            <PersonalCompanionView
+              key="companion-view"
+              state={state}
+              apiBase=""
+              onStateUpdate={setState}
+              initialTab="companion"
+            />
+          )}
 
-      {activeTab === 'companion' && (
-        <PersonalCompanionView
-          key="companion-view"
-          state={state}
-          apiBase=""
-          onStateUpdate={setState}
-          initialTab="companion"
-        />
-      )}
+          {activeTab === 'journal' && (
+            <PersonalCompanionView
+              key="journal-view"
+              state={state}
+              apiBase=""
+              onStateUpdate={setState}
+              initialTab="journal"
+            />
+          )}
 
-      {activeTab === 'journal' && (
-        <PersonalCompanionView
-          key="journal-view"
-          state={state}
-          apiBase=""
-          onStateUpdate={setState}
-          initialTab="journal"
-        />
-      )}
+          {activeTab === 'devices' && (
+            <MedicalDevicesView
+              state={state}
+              onStateUpdated={setState}
+              initialCategory={deviceFocusCategory}
+              initialDeviceId={deviceFocusId}
+              onNavigateTab={(tab) => setActiveTab(tab)}
+              onOpenSansModal={() => setSansModalOpen(true)}
+            />
+          )}
 
-      {activeTab === 'devices' && (
-        <MedicalDevicesView
-          state={state}
-          onStateUpdated={setState}
-          initialCategory={deviceFocusCategory}
-          initialDeviceId={deviceFocusId}
-          onNavigateTab={(tab) => setActiveTab(tab)}
-          onOpenSansModal={() => setSansModalOpen(true)}
-        />
-      )}
+          {activeTab === 'hazards' && (
+            <SpaceflightHazardsView
+              state={state}
+              activeHazardId={activeHazardId}
+              onSelectHazard={setActiveHazardId}
+              onStateUpdated={setState}
+              onAskAssistant={(prompt) => {
+                setAssistantSeedPrompt(prompt);
+                setActiveTab('assistant');
+              }}
+              onOpenSansModal={() => setSansModalOpen(true)}
+              onNavigateModule={(tab) => setActiveTab(tab as NavTab)}
+              onOpenGuide={(sec, stepId) => openGuide(sec || 'risks', stepId || 'hazards')}
+            />
+          )}
 
-      {activeTab === 'hazards' && (
-        <SpaceflightHazardsView
-          state={state}
-          activeHazardId={activeHazardId}
-          onSelectHazard={setActiveHazardId}
-          onStateUpdated={setState}
-          onAskAssistant={(prompt) => {
-            setAssistantSeedPrompt(prompt);
-            setActiveTab('assistant');
-          }}
-          onOpenSansModal={() => setSansModalOpen(true)}
-          onNavigateModule={(tab) => setActiveTab(tab as NavTab)}
-        />
-      )}
+          {activeTab === 'ops' && (
+            <CrewMedOpsView
+              state={state}
+              unlockedCrewIds={unlockedCrewIds}
+              onUnlockCrew={(cid) => setUnlockedCrewIds((prev) => ({ ...prev, [cid]: true }))}
+              onLockCrew={(cid) => setUnlockedCrewIds((prev) => ({ ...prev, [cid]: false }))}
+              onStateUpdated={setState}
+              onOpenSansModal={() => setSansModalOpen(true)}
+            />
+          )}
 
-      {activeTab === 'ops' && (
-        <CrewMedOpsView
-          state={state}
-          unlockedCrewIds={unlockedCrewIds}
-          onUnlockCrew={(cid) => setUnlockedCrewIds((prev) => ({ ...prev, [cid]: true }))}
-          onLockCrew={(cid) => setUnlockedCrewIds((prev) => ({ ...prev, [cid]: false }))}
-          onStateUpdated={setState}
-          onOpenSansModal={() => setSansModalOpen(true)}
-        />
-      )}
+          {activeTab === 'assistant' && (
+            <AIHealthAssistantView
+              state={state}
+              initialPrompt={assistantSeedPrompt}
+              onStateUpdated={setState}
+            />
+          )}
 
-      {activeTab === 'assistant' && (
-        <AIHealthAssistantView
-          state={state}
-          initialPrompt={assistantSeedPrompt}
-          onStateUpdated={setState}
-        />
-      )}
+          {activeTab === 'history' && (
+            <HealthHistoryView
+              state={state}
+              onStateUpdated={setState}
+              unlockedCrewIds={unlockedCrewIds}
+              onUnlockCrew={(cid) => setUnlockedCrewIds((prev) => ({ ...prev, [cid]: true }))}
+              onLockCrew={(cid) => setUnlockedCrewIds((prev) => ({ ...prev, [cid]: false }))}
+            />
+          )}
 
-      {activeTab === 'history' && (
-        <HealthHistoryView
-          state={state}
-          onStateUpdated={setState}
-          unlockedCrewIds={unlockedCrewIds}
-          onUnlockCrew={(cid) => setUnlockedCrewIds((prev) => ({ ...prev, [cid]: true }))}
-          onLockCrew={(cid) => setUnlockedCrewIds((prev) => ({ ...prev, [cid]: false }))}
-        />
-      )}
+          {activeTab === 'comm' && (
+            <CommunicationStatusView
+              state={state}
+              onStateUpdated={setState}
+              onOpenEmergency={() => triggerEmergencyProtocol()}
+              onOpenSpaceRadiation={() => {
+                setActiveHazardId('radiation');
+                setActiveTab('hazards');
+              }}
+              onOpenEnvironment={() => {
+                setActiveHazardId('environment');
+                setActiveTab('hazards');
+              }}
+            />
+          )}
+        </main>
 
-      {activeTab === 'comm' && (
-        <CommunicationStatusView
-          state={state}
-          onStateUpdated={setState}
-          onOpenEmergency={() => triggerEmergencyProtocol()}
-          onOpenSpaceRadiation={() => {
-            setActiveHazardId('radiation');
-            setActiveTab('hazards');
-          }}
-          onOpenEnvironment={() => {
-            setActiveHazardId('environment');
-            setActiveTab('hazards');
-          }}
-        />
-      )}
-    </main>
-
-    {/* Subtle Footer Attribution & Data Distinction Notice */}
-    <footer className="border-t border-white/[0.07] py-4 px-4 sm:px-6 lg:px-8 text-xs text-[#E5E5E4]/65">
-      <div className="max-w-[1440px] mx-auto flex flex-wrap items-center justify-between gap-2">
-        <span>
-          TARS Care · Autonomous local RAG &amp; SQLite engine ·{' '}
-          {provenanceLabel(state.latest_telemetry.provenance)} active
-        </span>
-        <span>
-          Educational / Space Apps prototype only — does not diagnose conditions, prescribe medications, or replace Flight Surgeon care.
-        </span>
-      </div>
-    </footer>
-
-    {/* Crew Baseline Calibration Modal */}
-    {baselineOpen && (
-      <BaselineModal
-        state={state}
-        onClose={() => setBaselineOpen(false)}
-        onSaved={(updated) => setState(updated)}
-      />
-    )}
-
-    {/* Interactive SANS Amsler Vision Check Modal */}
-    {sansModalOpen && (
-      <SansAmslerModal
-        missionDay={state.latest_telemetry.mission_day}
-        astronautName={state.astronaut.name}
-        history={state.sans_assessments || []}
-        onClose={() => setSansModalOpen(false)}
-        onSaved={(nextState) => setState(nextState)}
-      />
-    )}
-
-    {/* Reset Demo Database Confirmation Modal */}
-    {resetConfirmOpen && (
-      <div
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="reset-confirm-title"
-        className="fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-center justify-center p-4"
-      >
-        <div className="mc-card max-w-md w-full p-6 space-y-4">
-          <div className="flex items-start gap-3">
-            <AlertTriangle className="w-5 h-5 text-amber-400 shrink-0 mt-0.5" />
-            <div>
-              <h2 id="reset-confirm-title" className="text-lg font-bold text-[#FAF9FA]">
-                Reset Mission Database to Synthetic Baseline?
-              </h2>
-              <p className="text-sm text-[#E5E5E4]/80 mt-1.5">
-                This permanently clears user-entered telemetry logs, psychological check-ins, personalized baseline adjustments, and queued Store-and-Forward reports, restoring Sol 155–184 demo data.
-              </p>
-            </div>
+        {/* Subtle Footer Attribution & Data Distinction Notice */}
+        <footer className="border-t border-white/[0.07] py-5 px-5 sm:px-8 lg:px-10 text-xs text-[#E5E5E4]/65">
+          <div className="max-w-[1440px] mx-auto flex flex-wrap items-center justify-between gap-3">
+            <span>
+              TARS Care · Autonomous local RAG &amp; SQLite engine ·{' '}
+              {provenanceLabel(state.latest_telemetry.provenance)} active
+            </span>
+            <span>
+              Educational / Space Apps prototype only — does not diagnose conditions, prescribe medications, or replace Flight Surgeon care.
+            </span>
           </div>
-          <div className="flex justify-end gap-2.5 pt-2">
-            <button
-              type="button"
-              onClick={() => setResetConfirmOpen(false)}
-              className="mc-btn-secondary px-4 py-2 text-xs"
-            >
-              Cancel
-            </button>
-            <button
-              type="button"
-              disabled={resetLoading}
-              onClick={handleConfirmResetDemo}
-              className="px-4 py-2 rounded-full bg-red-500/85 hover:bg-red-500 text-white text-xs font-semibold disabled:opacity-50"
-            >
-              {resetLoading ? 'Resetting...' : 'Yes, Reset Demo Data'}
-            </button>
-          </div>
-        </div>
+        </footer>
       </div>
-    )}
 
-    {/* Autonomous Emergency Escalation Checklist Modal */}
-    {emergencyOpen && (() => {
-      const mm = String(Math.floor(elapsedSec / 60)).padStart(2, '0');
-      const ss = String(elapsedSec % 60).padStart(2, '0');
-      const totalSteps = emergencyProtocol?.immediate_steps?.length || 0;
-      const doneCount = Object.values(completedSteps).filter(Boolean).length;
-      return (
+      {/* Crew Baseline Calibration Modal */}
+      {baselineOpen && (
+        <BaselineModal
+          state={state}
+          onClose={() => setBaselineOpen(false)}
+          onSaved={(updated) => setState(updated)}
+        />
+      )}
+
+      {/* Interactive SANS Amsler Vision Check Modal */}
+      {sansModalOpen && (
+        <SansAmslerModal
+          missionDay={state.latest_telemetry.mission_day}
+          astronautName={state.astronaut.name}
+          history={state.sans_assessments || []}
+          onClose={() => setSansModalOpen(false)}
+          onSaved={(nextState) => setState(nextState)}
+        />
+      )}
+
+      {/* Step-by-Step Astronaut Health Guide & Field Reference Popup */}
+      {guideModal && (
+        <HealthGuideModal
+          initialSection={guideModal.section}
+          initialStepId={guideModal.stepId}
+          onClose={() => setGuideModal(null)}
+          onNavigateTab={(tab) => setActiveTab(tab as NavTab)}
+          onOpenBaseline={() => setBaselineOpen(true)}
+          onOpenSansModal={() => setSansModalOpen(true)}
+        />
+      )}
+
+      {/* Reset Demo Database Confirmation Modal */}
+      {resetConfirmOpen && (
         <div
           role="dialog"
           aria-modal="true"
-          aria-label="Autonomous Emergency Escalation Checklist"
-          className="fixed inset-0 z-50 bg-black/85 backdrop-blur-sm flex items-center justify-center p-3 sm:p-4"
+          aria-labelledby="reset-confirm-title"
+          className="fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-center justify-center p-4"
         >
-          <div
-            className={`max-w-3xl w-full p-5 sm:p-6 space-y-4 max-h-[92vh] overflow-y-auto rounded-2xl transition-colors ${
-              highContrastEva
-                ? 'bg-black border-2 border-amber-300 text-white shadow-[0_0_40px_rgba(252,211,77,0.28)]'
-                : 'mc-card-glow'
-            }`}
-          >
-            <div className="flex flex-wrap items-start justify-between gap-3">
+          <div className="mc-card max-w-md w-full p-6 space-y-4">
+            <div className="flex items-start gap-3">
+              <AlertTriangle className="w-5 h-5 text-amber-400 shrink-0 mt-0.5" />
               <div>
-                <div className="flex flex-wrap items-center gap-2">
-                  <h2
-                    className={`font-bold ${
-                      highContrastEva ? 'text-xl sm:text-2xl text-amber-300' : 'text-xl text-[#FAF9FA]'
-                    }`}
-                  >
-                    Autonomous Emergency Escalation Checklist
-                  </h2>
-                  <span
-                    className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-mono font-bold ${
-                      highContrastEva
-                        ? 'bg-amber-300 text-black'
-                        : 'bg-[#0B0D1A] text-[#A5D8FF] border border-[#A5D8FF]/30'
-                    }`}
-                  >
-                    <Clock className="w-3.5 h-3.5" />
-                    <span>T+{mm}:{ss}</span>
-                  </span>
-                  {totalSteps > 0 && (
-                    <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-emerald-500/20 text-emerald-200 border border-emerald-400/40">
-                      <CheckCircle2 className="w-3.5 h-3.5" />
-                      <span>
-                        {doneCount}/{totalSteps} Done
-                      </span>
-                    </span>
-                  )}
-                </div>
-                <p className={`text-xs mt-1 ${highContrastEva ? 'text-white/90' : 'text-[#E5E5E4]/80'}`}>
-                  Executes instantaneously onboard with deterministic local procedures — zero Earth or LLM link required.
+                <h2 id="reset-confirm-title" className="text-lg font-bold text-[#FAF9FA]">
+                  Reset Mission Database to Synthetic Baseline?
+                </h2>
+                <p className="text-sm text-[#E5E5E4]/80 mt-1.5">
+                  This permanently clears user-entered telemetry logs, psychological check-ins, personalized baseline adjustments, and queued Store-and-Forward reports, restoring Sol 155–184 demo data.
                 </p>
               </div>
-              <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  onClick={() => setHighContrastEva((prev) => !prev)}
-                  className={`px-3 py-2 rounded-full text-xs font-bold inline-flex items-center gap-1.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#A5D8FF] ${
-                    highContrastEva
+            </div>
+            <div className="flex justify-end gap-2.5 pt-2">
+              <button
+                type="button"
+                onClick={() => setResetConfirmOpen(false)}
+                className="mc-btn-secondary px-4 py-2 text-xs"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={resetLoading}
+                onClick={handleConfirmResetDemo}
+                className="px-4 py-2 rounded-full bg-red-500/85 hover:bg-red-500 text-white text-xs font-semibold disabled:opacity-50"
+              >
+                {resetLoading ? 'Resetting...' : 'Yes, Reset Demo Data'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Autonomous Emergency Escalation Checklist Modal */}
+      {emergencyOpen && (() => {
+        const mm = String(Math.floor(elapsedSec / 60)).padStart(2, '0');
+        const ss = String(elapsedSec % 60).padStart(2, '0');
+        const totalSteps = emergencyProtocol?.immediate_steps?.length || 0;
+        const doneCount = Object.values(completedSteps).filter(Boolean).length;
+        return (
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-label="Autonomous Emergency Escalation Checklist"
+            className="fixed inset-0 z-50 bg-black/85 backdrop-blur-sm flex items-center justify-center p-3 sm:p-4"
+          >
+            <div
+              className={`max-w-3xl w-full p-5 sm:p-6 space-y-4 max-h-[92vh] overflow-y-auto rounded-2xl transition-colors ${highContrastEva
+                ? 'bg-black border-2 border-amber-300 text-white shadow-[0_0_40px_rgba(252,211,77,0.28)]'
+                : 'mc-card-glow'
+                }`}
+            >
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <h2
+                      className={`font-bold ${highContrastEva ? 'text-xl sm:text-2xl text-amber-300' : 'text-xl text-[#FAF9FA]'
+                        }`}
+                    >
+                      Autonomous Emergency Escalation Checklist
+                    </h2>
+                    <span
+                      className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-mono font-bold ${highContrastEva
+                        ? 'bg-amber-300 text-black'
+                        : 'bg-[#0B0D1A] text-[#A5D8FF] border border-[#A5D8FF]/30'
+                        }`}
+                    >
+                      <Clock className="w-3.5 h-3.5" />
+                      <span>T+{mm}:{ss}</span>
+                    </span>
+                    {totalSteps > 0 && (
+                      <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-emerald-500/20 text-emerald-200 border border-emerald-400/40">
+                        <CheckCircle2 className="w-3.5 h-3.5" />
+                        <span>
+                          {doneCount}/{totalSteps} Done
+                        </span>
+                      </span>
+                    )}
+                  </div>
+                  <p className={`text-xs mt-1 ${highContrastEva ? 'text-white/90' : 'text-[#E5E5E4]/80'}`}>
+                    Executes instantaneously onboard with deterministic local procedures — zero Earth or LLM link required.
+                  </p>
+                </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setHighContrastEva((prev) => !prev)}
+                    className={`px-3 py-2 rounded-full text-xs font-bold inline-flex items-center gap-1.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#A5D8FF] ${highContrastEva
                       ? 'bg-amber-300 text-black'
                       : 'bg-[#0B0D1A] text-[#FAF9FA] border border-white/15 hover:border-amber-300/60'
-                  }`}
-                >
-                  <Contrast className="w-3.5 h-3.5" />
-                  <span>{highContrastEva ? 'EVA High-Contrast ON' : 'EVA High-Contrast'}</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setEmergencyOpen(false)}
-                  className="p-2 rounded-full bg-[#0B0D1A] text-[#E5E5E4] hover:text-[#FAF9FA] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#A5D8FF]"
-                  aria-label="Close modal"
-                >
-                  <X className="w-4 h-4" />
-                </button>
+                      }`}
+                  >
+                    <Contrast className="w-3.5 h-3.5" />
+                    <span>{highContrastEva ? 'EVA High-Contrast ON' : 'EVA High-Contrast'}</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setEmergencyOpen(false)}
+                    className="p-2 rounded-full bg-[#0B0D1A] text-[#E5E5E4] hover:text-[#FAF9FA] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#A5D8FF]"
+                    aria-label="Close modal"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
               </div>
-            </div>
 
-            {/* Offline Web Speech Readout & Hands-Free Voice Command Controls */}
-            <div
-              className={`rounded-xl p-3 flex flex-wrap items-center justify-between gap-2 border ${
-                highContrastEva
+              {/* Offline Web Speech Readout & Hands-Free Voice Command Controls */}
+              <div
+                className={`rounded-xl p-3 flex flex-wrap items-center justify-between gap-2 border ${highContrastEva
                   ? 'bg-[#0A0A0A] border-white/30'
                   : 'bg-[#0B0D1A] border-white/[0.08]'
-              }`}
-            >
-              <div className="flex flex-wrap items-center gap-2">
-                <button
-                  type="button"
-                  disabled={!emergencyProtocol || !isSpeechSynthesisSupported()}
-                  onClick={() => speakProtocolSteps('all')}
-                  className="px-3 py-2 min-h-[40px] rounded-xl bg-[#181C2E] hover:bg-[#232844] text-xs font-semibold text-[#A5D8FF] border border-[#A5D8FF]/30 inline-flex items-center gap-1.5 disabled:opacity-45"
-                >
-                  <Volume2 className="w-3.5 h-3.5" />
-                  <span>Read All Steps</span>
-                </button>
-                <button
-                  type="button"
-                  disabled={!emergencyProtocol || !isSpeechSynthesisSupported()}
-                  onClick={() => {
-                    const nextIdx = totalSteps > 0 ? (activeStepIdx + 1) % totalSteps : 0;
-                    setActiveStepIdx(nextIdx);
-                    speakProtocolSteps('current', nextIdx);
-                  }}
-                  className="px-3 py-2 min-h-[40px] rounded-xl bg-[#181C2E] hover:bg-[#232844] text-xs font-semibold text-[#FAF9FA] border border-white/15 inline-flex items-center gap-1.5 disabled:opacity-45"
-                >
-                  <Volume2 className="w-3.5 h-3.5" />
-                  <span>Next Step Aloud</span>
-                </button>
-                {voiceSpeaking && (
+                  }`}
+              >
+                <div className="flex flex-wrap items-center gap-2">
                   <button
                     type="button"
-                    onClick={() => {
-                      stopSpeaking();
-                      setVoiceSpeaking(false);
-                      setVoiceStatusMsg('Stopped voice readout.');
-                    }}
-                    className="px-3 py-2 min-h-[40px] rounded-xl bg-red-500/20 hover:bg-red-500/30 text-xs font-semibold text-red-200 border border-red-400/40 inline-flex items-center gap-1.5"
+                    disabled={!emergencyProtocol || !isSpeechSynthesisSupported()}
+                    onClick={() => speakProtocolSteps('all')}
+                    className="px-3 py-2 min-h-[40px] rounded-xl bg-[#181C2E] hover:bg-[#232844] text-xs font-semibold text-[#A5D8FF] border border-[#A5D8FF]/30 inline-flex items-center gap-1.5 disabled:opacity-45"
                   >
-                    <Square className="w-3.5 h-3.5" />
-                    <span>Stop</span>
+                    <Volume2 className="w-3.5 h-3.5" />
+                    <span>Read All Steps</span>
                   </button>
-                )}
-                <button
-                  type="button"
-                  onClick={handleToggleVoiceCommand}
-                  className={`px-3 py-2 min-h-[40px] rounded-xl text-xs font-semibold inline-flex items-center gap-1.5 border ${
-                    voiceListening
+                  <button
+                    type="button"
+                    disabled={!emergencyProtocol || !isSpeechSynthesisSupported()}
+                    onClick={() => {
+                      const nextIdx = totalSteps > 0 ? (activeStepIdx + 1) % totalSteps : 0;
+                      setActiveStepIdx(nextIdx);
+                      speakProtocolSteps('current', nextIdx);
+                    }}
+                    className="px-3 py-2 min-h-[40px] rounded-xl bg-[#181C2E] hover:bg-[#232844] text-xs font-semibold text-[#FAF9FA] border border-white/15 inline-flex items-center gap-1.5 disabled:opacity-45"
+                  >
+                    <Volume2 className="w-3.5 h-3.5" />
+                    <span>Next Step Aloud</span>
+                  </button>
+                  {voiceSpeaking && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        stopSpeaking();
+                        setVoiceSpeaking(false);
+                        setVoiceStatusMsg('Stopped voice readout.');
+                      }}
+                      className="px-3 py-2 min-h-[40px] rounded-xl bg-red-500/20 hover:bg-red-500/30 text-xs font-semibold text-red-200 border border-red-400/40 inline-flex items-center gap-1.5"
+                    >
+                      <Square className="w-3.5 h-3.5" />
+                      <span>Stop</span>
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={handleToggleVoiceCommand}
+                    className={`px-3 py-2 min-h-[40px] rounded-xl text-xs font-semibold inline-flex items-center gap-1.5 border ${voiceListening
                       ? 'bg-emerald-500/25 text-emerald-200 border-emerald-400/60'
                       : 'bg-[#121522] text-[#E5E5E4] border-white/15 hover:border-[#A5D8FF]/45'
-                  }`}
-                >
-                  {voiceListening ? <MicOff className="w-3.5 h-3.5" /> : <Mic className="w-3.5 h-3.5" />}
-                  <span>{voiceListening ? 'Stop Mic' : 'Voice Cmd'}</span>
-                </button>
-              </div>
-              <div className="flex flex-wrap items-center gap-1.5">
-                {[
-                  { label: 'Confirm Step', cmd: 'confirm step' },
-                  { label: 'Next Step', cmd: 'next step' },
-                  { label: '+ Chest Pain', cmd: 'chest pain' },
-                ].map((chip) => (
-                  <button
-                    key={chip.label}
-                    type="button"
-                    onClick={() => applyVoiceCommandText(chip.cmd)}
-                    className="px-2.5 py-1.5 rounded-lg bg-[#121522] border border-white/10 hover:border-[#A5D8FF]/40 text-[11px] font-medium text-[#E5E5E4]"
+                      }`}
                   >
-                    {chip.label}
+                    {voiceListening ? <MicOff className="w-3.5 h-3.5" /> : <Mic className="w-3.5 h-3.5" />}
+                    <span>{voiceListening ? 'Stop Mic' : 'Voice Cmd'}</span>
                   </button>
-                ))}
+                </div>
+                <div className="flex flex-wrap items-center gap-1.5">
+                  {[
+                    { label: 'Confirm Step', cmd: 'confirm step' },
+                    { label: 'Next Step', cmd: 'next step' },
+                    { label: '+ Chest Pain', cmd: 'chest pain' },
+                  ].map((chip) => (
+                    <button
+                      key={chip.label}
+                      type="button"
+                      onClick={() => applyVoiceCommandText(chip.cmd)}
+                      className="px-2.5 py-1.5 rounded-lg bg-[#121522] border border-white/10 hover:border-[#A5D8FF]/40 text-[11px] font-medium text-[#E5E5E4]"
+                    >
+                      {chip.label}
+                    </button>
+                  ))}
+                </div>
+                {voiceStatusMsg && (
+                  <div className="w-full text-[11px] text-[#A5D8FF] pt-1">{voiceStatusMsg}</div>
+                )}
               </div>
-              {voiceStatusMsg && (
-                <div className="w-full text-[11px] text-[#A5D8FF] pt-1">{voiceStatusMsg}</div>
-              )}
-            </div>
 
-            <div className="flex flex-wrap gap-2">
-              {[
-                'Cardiopulmonary & Chest Triage',
-                'Radiation SPE Exposure',
-                'Cardiovascular / Gravity Adaptation',
-                'Habitat CO2 & Respiratory',
-                'Acute Fatigue & Isolation',
-              ].map((hz) => (
-                <button
-                  key={hz}
-                  type="button"
-                  onClick={() => triggerEmergencyProtocol(hz)}
-                  className={`px-3.5 py-2 rounded-full text-xs font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#A5D8FF] ${
-                    emergencyHazard === hz
+              <div className="flex flex-wrap gap-2">
+                {[
+                  'Cardiopulmonary & Chest Triage',
+                  'Radiation SPE Exposure',
+                  'Cardiovascular / Gravity Adaptation',
+                  'Habitat CO2 & Respiratory',
+                  'Acute Fatigue & Isolation',
+                ].map((hz) => (
+                  <button
+                    key={hz}
+                    type="button"
+                    onClick={() => triggerEmergencyProtocol(hz)}
+                    className={`px-3.5 py-2 rounded-full text-xs font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#A5D8FF] ${emergencyHazard === hz
                       ? highContrastEva
                         ? 'bg-amber-300 text-black font-bold'
                         : 'bg-[#EEF0F6] text-[#040404] font-semibold'
                       : 'bg-[#0B0D1A] text-[#E5E5E4] border border-white/15 hover:border-[#A5D8FF]/40'
-                  }`}
-                >
-                  {hz}
-                </button>
-              ))}
-            </div>
-
-            {emergencyError && (
-              <div className="rounded-xl border border-amber-500/35 bg-amber-500/10 p-3.5 text-xs text-amber-200">
-                Backend sync warning ({emergencyError}) — showing locally cached deterministic emergency checklist below.
+                      }`}
+                  >
+                    {hz}
+                  </button>
+                ))}
               </div>
-            )}
 
-            {emergencyLoading && !emergencyProtocol ? (
-              <div className="rounded-xl bg-[#0B0D1A] p-4 text-sm text-[#E5E5E4]">
-                Loading deterministic onboard triage checklist...
-              </div>
-            ) : emergencyProtocol ? (
-              <div className="space-y-4">
-                <div
-                  className={`rounded-xl p-4 space-y-1.5 border ${
-                    highContrastEva
+              {emergencyError && (
+                <div className="rounded-xl border border-amber-500/35 bg-amber-500/10 p-3.5 text-xs text-amber-200">
+                  Backend sync warning ({emergencyError}) — showing locally cached deterministic emergency checklist below.
+                </div>
+              )}
+
+              {emergencyLoading && !emergencyProtocol ? (
+                <div className="rounded-xl bg-[#0B0D1A] p-4 text-sm text-[#E5E5E4]">
+                  Loading deterministic onboard triage checklist...
+                </div>
+              ) : emergencyProtocol ? (
+                <div className="space-y-4">
+                  <div
+                    className={`rounded-xl p-4 space-y-1.5 border ${highContrastEva
                       ? 'bg-[#0A0A0A] border-white/35'
                       : 'bg-[#0B0D1A] border-white/[0.08]'
-                  }`}
-                >
-                  <div className="flex flex-wrap items-center justify-between gap-2">
-                    <div className="text-sm font-semibold text-[#A5D8FF]">
-                      {emergencyProtocol.protocol_id} · {emergencyProtocol.protocol_title}
+                      }`}
+                  >
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div className="text-sm font-semibold text-[#A5D8FF]">
+                        {emergencyProtocol.protocol_id} · {emergencyProtocol.protocol_title}
+                      </div>
+                      <span className="text-[11px] font-mono px-2 py-0.5 rounded bg-[#181C2E] text-[#E5E5E4]">
+                        {emergencyProtocol.execution_mode}
+                      </span>
                     </div>
-                    <span className="text-[11px] font-mono px-2 py-0.5 rounded bg-[#181C2E] text-[#E5E5E4]">
-                      {emergencyProtocol.execution_mode}
-                    </span>
-                  </div>
-                  <div className="text-xs text-[#E5E5E4]/85">
-                    Link Status: {emergencyProtocol.earth_comm_status} (Round-trip delay{' '}
-                    {emergencyProtocol.round_trip_delay_minutes} min)
-                  </div>
-                  <div className={`pt-1 font-semibold ${highContrastEva ? 'text-sm text-white' : 'text-xs text-[#FAF9FA]'}`}>
-                    Vitals: {emergencyProtocol.vital_signs_summary}
-                  </div>
-                  {emergencyProtocol.reported_symptoms && emergencyProtocol.reported_symptoms.length > 0 && (
-                    <div className="text-xs text-red-300 font-semibold pt-0.5">
-                      Active Symptoms: {emergencyProtocol.reported_symptoms.join(', ')}
+                    <div className="text-xs text-[#E5E5E4]/85">
+                      Link Status: {emergencyProtocol.earth_comm_status} (Round-trip delay{' '}
+                      {emergencyProtocol.round_trip_delay_minutes} min)
                     </div>
-                  )}
-                </div>
+                    <div className={`pt-1 font-semibold ${highContrastEva ? 'text-sm text-white' : 'text-xs text-[#FAF9FA]'}`}>
+                      Vitals: {emergencyProtocol.vital_signs_summary}
+                    </div>
+                    {emergencyProtocol.reported_symptoms && emergencyProtocol.reported_symptoms.length > 0 && (
+                      <div className="text-xs text-red-300 font-semibold pt-0.5">
+                        Active Symptoms: {emergencyProtocol.reported_symptoms.join(', ')}
+                      </div>
+                    )}
+                  </div>
 
-                <div className="space-y-2.5">
-                  {emergencyProtocol.immediate_steps.map((step, idx) => {
-                    const checked = Boolean(completedSteps[idx]);
-                    const isActive = idx === activeStepIdx;
-                    return (
-                      <label
-                        key={`${emergencyProtocol.protocol_id}-${idx}`}
-                        htmlFor={`emergency-step-${idx}`}
-                        onClick={() => setActiveStepIdx(idx)}
-                        className={`flex items-start gap-3 rounded-xl px-4 py-3.5 cursor-pointer transition-colors border ${
-                          checked
+                  <div className="space-y-2.5">
+                    {emergencyProtocol.immediate_steps.map((step, idx) => {
+                      const checked = Boolean(completedSteps[idx]);
+                      const isActive = idx === activeStepIdx;
+                      return (
+                        <label
+                          key={`${emergencyProtocol.protocol_id}-${idx}`}
+                          htmlFor={`emergency-step-${idx}`}
+                          onClick={() => setActiveStepIdx(idx)}
+                          className={`flex items-start gap-3 rounded-xl px-4 py-3.5 cursor-pointer transition-colors border ${checked
                             ? 'bg-emerald-950/45 border-emerald-400/60 text-emerald-100'
                             : isActive
                               ? highContrastEva
@@ -1004,73 +1236,72 @@ export default function App() {
                               : highContrastEva
                                 ? 'bg-[#050505] border-white/25 text-white'
                                 : 'bg-[#0B0D1A] border-white/[0.08] text-[#FAF9FA]'
-                        }`}
-                      >
-                        <input
-                          id={`emergency-step-${idx}`}
-                          name={`emergency_step_${idx}`}
-                          type="checkbox"
-                          checked={checked}
-                          onChange={() =>
-                            setCompletedSteps((prev) => ({
-                              ...prev,
-                              [idx]: !prev[idx],
-                            }))
-                          }
-                          className="mt-0.5 w-5 h-5 rounded accent-emerald-400 shrink-0 cursor-pointer"
-                        />
-                        <span
-                          className={`${
-                            highContrastEva ? 'text-base font-semibold leading-snug' : 'text-sm leading-snug'
-                          } ${checked ? 'line-through opacity-80' : ''}`}
+                            }`}
                         >
-                          {step}
-                        </span>
-                      </label>
-                    );
-                  })}
-                </div>
-
-                {emergencyProtocol.protocol_gap_notice && (
-                  <div className="rounded-xl border border-amber-500/25 bg-amber-500/10 px-4 py-3 text-xs text-amber-200 leading-relaxed">
-                    <strong>Diagnostic Capability Boundary:</strong> {emergencyProtocol.protocol_gap_notice}
+                          <input
+                            id={`emergency-step-${idx}`}
+                            name={`emergency_step_${idx}`}
+                            type="checkbox"
+                            checked={checked}
+                            onChange={() =>
+                              setCompletedSteps((prev) => ({
+                                ...prev,
+                                [idx]: !prev[idx],
+                              }))
+                            }
+                            className="mt-0.5 w-5 h-5 rounded accent-emerald-400 shrink-0 cursor-pointer"
+                          />
+                          <span
+                            className={`${highContrastEva ? 'text-base font-semibold leading-snug' : 'text-sm leading-snug'
+                              } ${checked ? 'line-through opacity-80' : ''}`}
+                          >
+                            {step}
+                          </span>
+                        </label>
+                      );
+                    })}
                   </div>
-                )}
 
-                <p className="text-xs text-[#E5E5E4]/75">
-                  Reference: {emergencyProtocol.supporting_citation} · {emergencyProtocol.safety_disclaimer}
-                </p>
-              </div>
-            ) : (
-              <div className="rounded-xl border border-red-500/30 bg-red-500/10 p-4 text-sm text-red-200">
-                Unable to render checklist payload. Click a category pill above to load deterministic offline emergency steps.
-              </div>
-            )}
+                  {emergencyProtocol.protocol_gap_notice && (
+                    <div className="rounded-xl border border-amber-500/25 bg-amber-500/10 px-4 py-3 text-xs text-amber-200 leading-relaxed">
+                      <strong>Diagnostic Capability Boundary:</strong> {emergencyProtocol.protocol_gap_notice}
+                    </div>
+                  )}
 
-            <div className="flex justify-end gap-2 pt-2">
-              <button
-                type="button"
-                onClick={() => {
-                  setEmergencyOpen(false);
-                  setActiveTab('comm');
-                }}
-                className="mc-btn-secondary px-4 py-2.5 text-xs inline-flex items-center gap-1.5"
-              >
-                <Radio className="w-3.5 h-3.5 text-[#A5D8FF]" />
-                <span>View Sync Queue</span>
-              </button>
-              <button
-                type="button"
-                onClick={() => setEmergencyOpen(false)}
-                className="mc-btn-primary px-6 py-2.5 text-xs"
-              >
-                Done
-              </button>
+                  <p className="text-xs text-[#E5E5E4]/75">
+                    Reference: {emergencyProtocol.supporting_citation} · {emergencyProtocol.safety_disclaimer}
+                  </p>
+                </div>
+              ) : (
+                <div className="rounded-xl border border-red-500/30 bg-red-500/10 p-4 text-sm text-red-200">
+                  Unable to render checklist payload. Click a category pill above to load deterministic offline emergency steps.
+                </div>
+              )}
+
+              <div className="flex justify-end gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setEmergencyOpen(false);
+                    setActiveTab('comm');
+                  }}
+                  className="mc-btn-secondary px-4 py-2.5 text-xs inline-flex items-center gap-1.5"
+                >
+                  <Radio className="w-3.5 h-3.5 text-[#A5D8FF]" />
+                  <span>View Sync Queue</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setEmergencyOpen(false)}
+                  className="mc-btn-primary px-6 py-2.5 text-xs"
+                >
+                  Done
+                </button>
+              </div>
             </div>
           </div>
-        </div>
-      );
-    })()}
-  </div>
-);
+        );
+      })()}
+    </div>
+  );
 }

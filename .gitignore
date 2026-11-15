@@ -25,3 +25,6 @@ dist/
 *.db-wal
 *.db-shm
 .playwright-mcp/
+.vercel/
+.vercel
+.env*

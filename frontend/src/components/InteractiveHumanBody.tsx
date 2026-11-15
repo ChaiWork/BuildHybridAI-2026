@@ -54,18 +54,18 @@ export const InteractiveHumanBody: React.FC<InteractiveHumanBodyProps> = ({
   return (
     <section
       aria-label="Interactive Human Body"
-      className="grid grid-cols-1 lg:grid-cols-[270px_minmax(0,1fr)_390px] gap-5 items-stretch"
+      className="grid grid-cols-1 lg:grid-cols-[260px_minmax(0,1fr)] xl:grid-cols-[260px_minmax(265px,1fr)_345px] 2xl:grid-cols-[276px_minmax(320px,1fr)_390px] gap-5 lg:gap-6 items-stretch"
     >
       {/* Left Rail: Numbered Anatomical Wayfinding Selector */}
-      <div className="mc-card p-4 flex flex-col justify-between gap-3">
+      <div className="mc-card p-5 flex flex-col justify-between gap-4">
         <div>
           <h2 className="text-lg font-semibold text-[#FAF9FA]">Body System Selector</h2>
-          <p className="text-xs text-[#E5E5E4]/80 mt-0.5">
+          <p className="text-xs text-[#E5E5E4]/80 mt-1 leading-relaxed">
             Choose an anatomical region to inspect readings and risks.
           </p>
         </div>
 
-        <div className="space-y-1.5" role="listbox" aria-label="Anatomical regions">
+        <div className="space-y-2" role="listbox" aria-label="Anatomical regions">
           {regions.map((region, idx) => {
             const isSelected = region.id === activeRegion.id;
             const meta = statusMeta(region.status);
@@ -76,21 +76,21 @@ export const InteractiveHumanBody: React.FC<InteractiveHumanBodyProps> = ({
                 role="option"
                 aria-selected={isSelected}
                 onClick={() => onSelectRegion(region.id)}
-                className={`w-full flex items-center justify-between px-3 py-2 rounded-xl text-left transition-all duration-150 ${isSelected
+                className={`w-full flex items-center justify-between gap-2 px-3 py-2.5 rounded-xl text-left transition-all duration-150 ${isSelected
                   ? 'bg-[#A5D8FF]/15 border border-[#A5D8FF] text-[#FAF9FA]'
                   : 'bg-[#0B0D1A]/85 border border-white/[0.06] text-[#E5E5E4] hover:border-[#A5D8FF]/40 hover:text-[#FAF9FA]'
                   }`}
               >
-                <span className="flex items-center gap-2.5 text-sm font-medium">
+                <span className="flex items-center gap-2 text-sm font-medium min-w-0">
                   <span
-                    className={`w-5 h-5 rounded-full text-xs font-semibold flex items-center justify-center tabular-data ${isSelected ? 'bg-[#A5D8FF] text-[#040404]' : 'bg-[#181C2E] text-[#E5E5E4]'
+                    className={`w-5 h-5 rounded-full text-xs font-semibold flex items-center justify-center shrink-0 tabular-data ${isSelected ? 'bg-[#A5D8FF] text-[#040404]' : 'bg-[#181C2E] text-[#E5E5E4]'
                       }`}
                   >
                     {idx + 1}
                   </span>
-                  <span>{region.name}</span>
+                  <span className="whitespace-nowrap">{region.name}</span>
                 </span>
-                <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${meta.badgeClass}`}>
+                <span className={`px-2.5 py-0.5 rounded-full text-xs font-medium shrink-0 ${meta.badgeClass}`}>
                   {meta.label}
                 </span>
               </button>
@@ -98,13 +98,13 @@ export const InteractiveHumanBody: React.FC<InteractiveHumanBodyProps> = ({
           })}
         </div>
 
-        <p className="text-xs text-[#E5E5E4]/70 leading-snug">
+        <p className="text-xs text-[#E5E5E4]/70 leading-relaxed">
           Measurements track drift against your personal baseline — avoiding arbitrary thresholds or assuming Earth-based clinical reference ranges automatically represent safe limits in microgravity.
         </p>
       </div>
 
       {/* Center Stage: Realistic 3D Medical Anatomy Render + Precision Interactive Overlay */}
-      <div className="mc-card-glow relative p-4 flex flex-col items-center justify-between overflow-hidden min-h-[345px]">
+      <div className="mc-card-glow relative p-5 flex flex-col items-center justify-between overflow-hidden min-h-[380px]">
         {/* Ambient radial illumination behind key product feature */}
         <div
           aria-hidden="true"
@@ -115,12 +115,12 @@ export const InteractiveHumanBody: React.FC<InteractiveHumanBodyProps> = ({
           }}
         />
 
-        <div className="relative z-10 w-full flex items-center justify-between gap-3">
+        <div className="relative z-10 w-full flex flex-wrap items-center justify-between gap-2">
           <div>
-            <h2 className="text-lg font-semibold text-[#FAF9FA]">Interactive Human Body</h2>
+            <h2 className="text-base xl:text-lg font-semibold text-[#FAF9FA]">Interactive Human Body</h2>
             <p className="text-xs text-[#E5E5E4]/80">Select any organ or bone target directly</p>
           </div>
-          <span className="px-3.5 py-1 rounded-full bg-[#0B0D1A]/90 border border-[#A5D8FF]/40 text-xs font-medium text-[#A5D8FF]">
+          <span className="px-3 py-1 rounded-full bg-[#0B0D1A]/90 border border-[#A5D8FF]/40 text-xs font-medium text-[#A5D8FF] shrink-0">
             {activeRegion.name}
           </span>
         </div>
@@ -256,12 +256,12 @@ export const InteractiveHumanBody: React.FC<InteractiveHumanBodyProps> = ({
       </div>
 
       {/* Right Column: Selected Region Metrics, 7-Day Trend, Spaceflight Risk & Primary CTA */}
-      <div className="mc-card p-4 flex flex-col justify-between gap-2.5">
-        <div className="space-y-2.5">
+      <div className="lg:col-span-2 xl:col-span-1 mc-card p-5 flex flex-col justify-between gap-4">
+        <div className="space-y-3.5">
           <div className="flex items-start justify-between gap-3">
             <div>
               <h3 className="text-lg font-semibold text-[#FAF9FA]">{activeRegion.name}</h3>
-              <p className="text-xs text-[#E5E5E4]/80 mt-0.5">{activeRegion.summary}</p>
+              <p className="text-xs text-[#E5E5E4]/80 mt-1 leading-relaxed">{activeRegion.summary}</p>
             </div>
             <span className={`px-3 py-1 rounded-full text-xs font-semibold shrink-0 ${activeMeta.badgeClass}`}>
               {activeMeta.label}
@@ -269,15 +269,15 @@ export const InteractiveHumanBody: React.FC<InteractiveHumanBodyProps> = ({
           </div>
 
           {/* Relevant Measurements vs Personal Baseline */}
-          <div className="space-y-1.5">
+          <div className="space-y-2">
             {activeRegion.measurements.map((m) => (
               <div
                 key={m.label}
-                className="flex items-center justify-between gap-3 px-3 py-1.5 rounded-xl bg-[#0B0D1A]"
+                className="flex items-center justify-between gap-3 px-3.5 py-2.5 rounded-xl bg-[#0B0D1A]"
               >
                 <div>
                   <div className="text-xs text-[#E5E5E4] font-medium">{m.label}</div>
-                  <div className="text-xs text-[#E5E5E4]/65">
+                  <div className="text-xs text-[#E5E5E4]/65 mt-0.5">
                     Baseline: {m.baseline} · {formatRecordedTime(m.recorded_at)}
                   </div>
                 </div>
@@ -290,8 +290,8 @@ export const InteractiveHumanBody: React.FC<InteractiveHumanBodyProps> = ({
           </div>
 
           {/* Mini 7-Sol Trend Visualization */}
-          <div className="rounded-xl bg-[#0B0D1A] p-3">
-            <div className="flex items-center justify-between mb-1.5">
+          <div className="rounded-xl bg-[#0B0D1A] p-3.5">
+            <div className="flex items-center justify-between mb-2">
               <span className="text-xs font-medium text-[#E5E5E4]">7-Sol Trend</span>
               <span className="text-xs text-[#A5D8FF]">{activeRegion.trend_label}</span>
             </div>
@@ -329,8 +329,8 @@ export const InteractiveHumanBody: React.FC<InteractiveHumanBodyProps> = ({
           </div>
 
           {/* Possible Spaceflight Risk Explanation */}
-          <div className="rounded-xl bg-[#0B0D1A] p-3">
-            <div className="text-xs font-semibold text-[#A5D8FF] mb-0.5">
+          <div className="rounded-xl bg-[#0B0D1A] p-3.5">
+            <div className="text-xs font-semibold text-[#A5D8FF] mb-1">
               Spaceflight Context
             </div>
             <p className="text-xs text-[#E5E5E4] leading-relaxed">
@@ -340,7 +340,7 @@ export const InteractiveHumanBody: React.FC<InteractiveHumanBodyProps> = ({
         </div>
 
         {/* Action Buttons */}
-        <div className="flex flex-wrap items-center gap-2.5 pt-0.5">
+        <div className="flex flex-wrap items-center gap-3 pt-1">
           <button
             type="button"
             onClick={() => onStartAssessment(activeRegion.id)}

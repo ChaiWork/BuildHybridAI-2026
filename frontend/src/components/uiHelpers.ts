@@ -86,7 +86,14 @@ export interface AIWarmupResponse {
 }
 
 export async function updateLocalAIConfig(
-  payload: { llm_enabled?: boolean; selected_model?: string | null },
+  payload: {
+    llm_enabled?: boolean;
+    llm_provider?: 'local' | 'api';
+    selected_model?: string | null;
+    selected_api_model?: string | null;
+    groq_api_key?: string | null;
+    clear_groq_api_key?: boolean;
+  },
   onStateUpdated?: (state: FullSystemState) => void,
 ): Promise<LocalAIStatus> {
   const status = await apiRequest<LocalAIStatus>('/api/ai/config', {
@@ -103,10 +110,11 @@ export async function updateLocalAIConfig(
 export async function warmupLocalAI(
   model?: string | null,
   onStateUpdated?: (state: FullSystemState) => void,
+  provider?: 'local' | 'api',
 ): Promise<AIWarmupResponse> {
   const res = await apiRequest<AIWarmupResponse>('/api/ai/warmup', {
     method: 'POST',
-    body: JSON.stringify({ model: model || null }),
+    body: JSON.stringify({ model: model || null, provider: provider || null }),
   });
   if (onStateUpdated) {
     const fresh = await apiRequest<FullSystemState>('/api/state');

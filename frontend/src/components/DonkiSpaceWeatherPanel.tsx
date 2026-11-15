@@ -542,7 +542,7 @@ export const DonkiSpaceWeatherPanel: React.FC<DonkiSpaceWeatherPanelProps> = ({
         </div>
 
         {showAdvancedParams && (
-          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2.5 pt-2 border-t border-white/[0.06]">
+          <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-6 gap-3 pt-2 border-t border-white/[0.06]">
             <div>
               <label htmlFor="donki-cme-speed" className="block text-[11px] text-[#E5E5E4]/75 mb-1">
                 CME Min Speed (km/s)

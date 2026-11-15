@@ -30,6 +30,7 @@ import {
   FullSystemState,
   JournalEntryRecord,
 } from '../types';
+import { AIProviderSwitcher } from './AIProviderSwitcher';
 
 interface Props {
   state: FullSystemState;
@@ -352,17 +353,20 @@ export const PersonalCompanionView: React.FC<Props> = ({
               </h1>
               <span className="mc-pill bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 flex items-center gap-1">
                 <Lock className="w-3 h-3" />
-                100% Local Private Storage
-              </span>
-              <span className="mc-pill bg-[#A5D8FF]/15 text-[#A5D8FF] border border-[#A5D8FF]/30">
-                {local_ai_status?.ollama_available
-                  ? `Local Ollama (${local_ai_status.ollama_model})`
-                  : 'Offline Companion Engine Ready'}
+                Local SQLite Journal Storage
               </span>
             </div>
             <p className="text-sm text-[#E5E5E4] max-w-3xl">
               {non_diagnostic_disclaimer}
             </p>
+            <div className="mt-3">
+              <AIProviderSwitcher
+                aiStatus={local_ai_status}
+                variant="toolbar"
+                onStateUpdated={onStateUpdate}
+                onNotice={(msg) => setBanner(msg ? { type: 'ok', text: msg } : null)}
+              />
+            </div>
           </div>
 
           <div className="flex flex-wrap items-center gap-2">

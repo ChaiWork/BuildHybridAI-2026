@@ -12,6 +12,7 @@ import {
 import {
   Activity,
   Eye,
+  HelpCircle,
   MessageSquare,
   Radiation,
   Radio,
@@ -23,6 +24,7 @@ import {
 import { FullSystemState } from '../types';
 import { apiRequest, gravityRegimeLabel, statusMeta } from './uiHelpers';
 import { DonkiSpaceWeatherPanel } from './DonkiSpaceWeatherPanel';
+import { GuideSection } from './HealthGuideModal';
 import { InsightWeatherPanel } from './InsightWeatherPanel';
 
 interface SpaceflightHazardsViewProps {
@@ -33,6 +35,7 @@ interface SpaceflightHazardsViewProps {
   onAskAssistant: (prompt: string) => void;
   onOpenSansModal?: () => void;
   onNavigateModule?: (tab: string) => void;
+  onOpenGuide?: (section?: GuideSection, stepId?: string) => void;
 }
 
 const HAZARD_META = [
@@ -69,6 +72,7 @@ export const SpaceflightHazardsView: React.FC<SpaceflightHazardsViewProps> = ({
   onAskAssistant,
   onOpenSansModal,
   onNavigateModule,
+  onOpenGuide,
 }) => {
   const modules = state.assessment.hazard_modules_4step || [];
   const activeMod = modules.find((m) => m.id === activeHazardId) || modules[0];
@@ -239,16 +243,28 @@ export const SpaceflightHazardsView: React.FC<SpaceflightHazardsViewProps> = ({
           </p>
         </div>
 
-        <button
-          type="button"
-          onClick={() =>
-            onAskAssistant(`Summarize current risks and guidance for ${activeMod.title} on Sol ${latest.mission_day}.`)
-          }
-          className="mc-btn-secondary px-4 py-2.5 text-sm inline-flex items-center gap-2"
-        >
-          <MessageSquare className="w-4 h-4 text-[#A5D8FF]" />
-          <span>Ask AI Health Assistant</span>
-        </button>
+        <div className="flex flex-wrap items-center gap-2.5">
+          {onOpenGuide && (
+            <button
+              type="button"
+              onClick={() => onOpenGuide('risks', 'hazards')}
+              className="mc-btn-secondary px-4 py-2.5 text-sm inline-flex items-center gap-2"
+            >
+              <HelpCircle className="w-4 h-4 text-[#A5D8FF]" />
+              <span>Explain Risks Simply</span>
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={() =>
+              onAskAssistant(`Summarize current risks and guidance for ${activeMod.title} on Sol ${latest.mission_day}.`)
+            }
+            className="mc-btn-secondary px-4 py-2.5 text-sm inline-flex items-center gap-2"
+          >
+            <MessageSquare className="w-4 h-4 text-[#A5D8FF]" />
+            <span>Ask AI Health Assistant</span>
+          </button>
+        </div>
       </section>
 
       {/* The 4 Consistent Sections Required by Design Brief */}
@@ -524,7 +540,7 @@ export const SpaceflightHazardsView: React.FC<SpaceflightHazardsViewProps> = ({
             </div>
           )}
         </div>
-        <div className="grid grid-cols-1 md:grid-cols-5 gap-3 text-xs">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-4 text-xs">
           {Object.entries(state.assessment.five_hazard_support_integration || {}).map(
             ([hzName, info]) => (
               <div key={hzName} className="p-3 rounded-xl bg-[#0B0D1A] space-y-1">

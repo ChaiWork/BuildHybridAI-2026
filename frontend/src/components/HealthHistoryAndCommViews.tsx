@@ -29,9 +29,8 @@ import {
   gravityRegimeLabel,
   provenanceLabel,
   statusMeta,
-  updateLocalAIConfig,
-  warmupLocalAI,
 } from './uiHelpers';
+import { AIProviderSwitcher } from './AIProviderSwitcher';
 import { DonkiSpaceWeatherPanel } from './DonkiSpaceWeatherPanel';
 import { InsightWeatherPanel } from './InsightWeatherPanel';
 
@@ -697,7 +696,6 @@ export const CommunicationStatusView: React.FC<CommProps> = ({
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [syncError, setSyncError] = useState<string | null>(null);
-  const [aiBusy, setAiBusy] = useState(false);
   const [aiNotice, setAiNotice] = useState<string | null>(null);
 
   const commCentre = state.comm_centre_state;
@@ -975,7 +973,7 @@ export const CommunicationStatusView: React.FC<CommProps> = ({
         </div>
 
         {/* Key Telemetry Metrics Grid */}
-        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 text-xs">
+        <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-6 gap-3.5 text-xs">
           <div className="rounded-xl bg-[#0B0D1A] p-3.5">
             <span className="text-[#8E95A8] block">Distance from Earth</span>
             <span className="text-lg font-bold text-[#FAF9FA] tabular-nums mt-1 block">
@@ -1435,7 +1433,7 @@ export const CommunicationStatusView: React.FC<CommProps> = ({
           <div className="flex items-center justify-between gap-2">
             <div className="flex items-center gap-2">
               <Cpu className="w-5 h-5 text-[#A5D8FF]" />
-              <h2 className="text-lg font-semibold text-[#FAF9FA]">Local Autonomous Intelligence Stack</h2>
+              <h2 className="text-lg font-semibold text-[#FAF9FA]">Autonomous &amp; API Intelligence Stack</h2>
             </div>
             <span className="text-xs px-2.5 py-0.5 rounded-full bg-[#0B0D1A] text-[#A5D8FF] border border-[#A5D8FF]/25">
               {aiStatus?.active_engine_mode || 'DETERMINISTIC_OFFLINE_RAG'}
@@ -1460,93 +1458,34 @@ export const CommunicationStatusView: React.FC<CommProps> = ({
               <span className="text-[#E5E5E4]">Local Ollama Detection (127.0.0.1:11434)</span>
               <span className="text-xs font-semibold text-[#E5E5E4]">
                 {aiStatus?.ollama_available
-                  ? aiStatus?.llm_active
+                  ? aiStatus?.llm_provider === 'local' && aiStatus?.llm_active
                     ? `Active (${aiStatus.ollama_model})`
-                    : `Installed (${aiStatus.ollama_model}, LLM Paused)`
+                    : `Installed (${aiStatus.ollama_model}, Standby)`
                   : 'Not Running (Fallback Active)'}
+              </span>
+            </div>
+            <div className="flex items-center justify-between gap-3 rounded-xl bg-[#0B0D1A] px-4 py-3">
+              <span className="text-[#E5E5E4]">External API LLM (Groq Cloud)</span>
+              <span className="text-xs font-semibold text-[#A5D8FF] text-right">
+                {aiStatus?.api_blocked_blackout
+                  ? `Paused (OFFLINE Blackout · ${aiStatus.api_model || 'qwen/qwen3.8-27b'})`
+                  : aiStatus?.api_key_configured
+                    ? aiStatus?.llm_provider === 'api' && aiStatus?.llm_active
+                      ? `Active (${aiStatus.api_model || 'qwen/qwen3.8-27b'}) · ${aiStatus.api_key_status}`
+                      : `Ready (${aiStatus.api_model || 'qwen/qwen3.8-27b'}, Standby) · ${aiStatus.api_key_status}`
+                    : 'Not Configured (Use Groq Key below)'}
               </span>
             </div>
           </div>
 
-          {aiStatus?.ollama_available && (
-            <div className="pt-2 border-t border-white/[0.08] flex flex-wrap items-center gap-2.5">
-              {(aiStatus.installed_chat_models?.length || 0) > 0 && (
-                <select
-                  id="comm-ollama-model-select"
-                  name="comm_ollama_model"
-                  aria-label="Select local Ollama model"
-                  disabled={aiBusy}
-                  value={aiStatus.ollama_model || aiStatus.installed_chat_models?.[0] || ''}
-                  onChange={async (e) => {
-                    const model = e.target.value;
-                    setAiBusy(true);
-                    setAiNotice(null);
-                    try {
-                      await updateLocalAIConfig({ selected_model: model }, onStateUpdated);
-                      setAiNotice(`Active Ollama model updated to ${model}.`);
-                    } catch (err) {
-                      setAiNotice(err instanceof Error ? err.message : 'Unable to change model.');
-                    } finally {
-                      setAiBusy(false);
-                    }
-                  }}
-                  className="rounded-full bg-[#0B0D1A] border border-white/15 px-3.5 py-2 text-xs text-[#FAF9FA] focus:border-[#A5D8FF] focus:outline-none"
-                >
-                  {aiStatus.installed_chat_models?.map((m) => (
-                    <option key={m} value={m}>
-                      {m}
-                    </option>
-                  ))}
-                </select>
-              )}
-
-              <button
-                type="button"
-                disabled={aiBusy}
-                onClick={async () => {
-                  setAiBusy(true);
-                  setAiNotice(null);
-                  try {
-                    const nextEnabled = !(aiStatus.llm_enabled ?? true);
-                    await updateLocalAIConfig({ llm_enabled: nextEnabled }, onStateUpdated);
-                    setAiNotice(
-                      nextEnabled
-                        ? 'Local Ollama LLM synthesis enabled.'
-                        : 'Switched to deterministic offline RAG synthesis.'
-                    );
-                  } catch (err) {
-                    setAiNotice(err instanceof Error ? err.message : 'Failed to toggle AI mode.');
-                  } finally {
-                    setAiBusy(false);
-                  }
-                }}
-                className="mc-btn-secondary px-4 py-2 text-xs"
-              >
-                {aiStatus.llm_enabled ?? true ? 'Pause Local LLM' : 'Enable Local LLM'}
-              </button>
-
-              <button
-                type="button"
-                disabled={aiBusy}
-                onClick={async () => {
-                  setAiBusy(true);
-                  setAiNotice(null);
-                  try {
-                    const res = await warmupLocalAI(aiStatus.ollama_model, onStateUpdated);
-                    setAiNotice(res.message);
-                  } catch (err) {
-                    setAiNotice(err instanceof Error ? err.message : 'Warmup failed.');
-                  } finally {
-                    setAiBusy(false);
-                  }
-                }}
-                className="mc-btn-primary px-4 py-2 text-xs inline-flex items-center gap-1.5"
-              >
-                <RefreshCw className={`w-3.5 h-3.5 ${aiBusy ? 'animate-spin' : ''}`} />
-                <span>Warm Up Model</span>
-              </button>
-            </div>
-          )}
+          <div className="pt-2 border-t border-white/[0.08]">
+            <AIProviderSwitcher
+              aiStatus={aiStatus}
+              variant="panel"
+              onStateUpdated={onStateUpdated}
+              onNotice={setAiNotice}
+            />
+          </div>
 
           {aiNotice && (
             <div className="rounded-xl bg-[#0B0D1A] px-3.5 py-2.5 text-xs text-[#A5D8FF] border border-[#A5D8FF]/30">

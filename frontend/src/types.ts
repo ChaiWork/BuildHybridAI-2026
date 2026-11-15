@@ -230,12 +230,32 @@ export interface GuidanceTierItem {
   source: string;
 }
 
+export interface APIModelOption {
+  id: string;
+  label: string;
+  reason: string;
+}
+
 export interface LocalAIStatus {
   ollama_available: boolean;
   ollama_reachable?: boolean;
   ollama_model: string | null;
   installed_chat_models?: string[];
   installed_embed_models?: string[];
+  llm_provider?: 'local' | 'api';
+  active_provider?: 'api_groq' | 'local_ollama' | 'offline_fallback';
+  api_provider?: string;
+  api_available?: boolean;
+  api_reachable?: boolean;
+  api_blocked_blackout?: boolean;
+  api_model?: string | null;
+  available_api_models?: string[];
+  api_model_catalog?: APIModelOption[];
+  api_key_configured?: boolean;
+  api_key_status?: string;
+  api_key_source?: string;
+  last_api_error?: string | null;
+  active_model_display?: string | null;
   llm_enabled?: boolean;
   llm_active?: boolean;
   sentence_transformers_installed: boolean;

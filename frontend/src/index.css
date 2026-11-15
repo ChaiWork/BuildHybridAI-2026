@@ -37,49 +37,82 @@ body {
   font-variant-numeric: tabular-nums;
 }
 
+/* Theme browser scrollbars from the deep-space palette */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.16) transparent;
+}
 
-  .mc-card {
-    background-color: var(--mc-card);
-    border: 1px solid rgba(255, 255, 255, 0.08);
-    border-radius: 16px;
-  }
+*::-webkit-scrollbar {
+  width: 7px;
+  height: 7px;
+}
 
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
 
-    .mc-card-glow {
-      background-color: var(--mc-card);
-      border: 1px solid rgba(165, 216, 255, 0.22);
-      border-radius: 16px;
-      box-shadow: 0 12px 36px -14px rgba(165, 216, 255, 0.2);
-    }
+*::-webkit-scrollbar-thumb {
+  background-color: rgba(255, 255, 255, 0.16);
+  border-radius: 9999px;
+}
 
+*::-webkit-scrollbar-thumb:hover {
+  background-color: rgba(165, 216, 255, 0.35);
+}
 
-      .mc-btn-primary {
-        background-color: var(--mc-btn);
-        color: var(--mc-btn-ink);
-        border-radius: 9999px;
-        font-weight: 600;
-        transition: transform 160ms ease, opacity 160ms ease, box-shadow 160ms ease;
-      }
+.mc-card {
+  background-color: var(--mc-card);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 16px;
+}
 
-      .mc-btn-primary:hover {
-        opacity: 0.94;
-        box-shadow: 0 0 22px rgba(165, 216, 255, 0.22);
-      }
+.mc-card-glow {
+  background-color: var(--mc-card);
+  border: 1px solid rgba(165, 216, 255, 0.22);
+  border-radius: 16px;
+  box-shadow: 0 12px 36px -14px rgba(165, 216, 255, 0.2);
+}
 
-      .mc-btn-primary:active {
-        transform: scale(0.985);
-      }
+.mc-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  padding: 0.25rem 0.65rem;
+  border-radius: 9999px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  line-height: 1.2;
+  white-space: nowrap;
+}
 
-      .mc-btn-secondary {
-        background-color: #181C2E;
-        color: #FAF9FA;
-        border: 1px solid rgba(255, 255, 255, 0.12);
-        border-radius: 9999px;
-        font-weight: 500;
-        transition: border-color 160ms ease, background-color 160ms ease;
-      }
+.mc-btn-primary {
+  background-color: var(--mc-btn);
+  color: var(--mc-btn-ink);
+  border-radius: 9999px;
+  font-weight: 600;
+  transition: transform 160ms ease, opacity 160ms ease, box-shadow 160ms ease;
+}
 
-      .mc-btn-secondary:hover {
-        border-color: rgba(165, 216, 255, 0.45);
-        background-color: #1E243B;
-      }
+.mc-btn-primary:hover {
+  opacity: 0.94;
+  box-shadow: 0 0 22px rgba(165, 216, 255, 0.22);
+}
+
+.mc-btn-primary:active {
+  transform: scale(0.985);
+}
+
+.mc-btn-secondary {
+  background-color: #181C2E;
+  color: #FAF9FA;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 9999px;
+  font-weight: 500;
+  transition: border-color 160ms ease, background-color 160ms ease;
+}
+
+.mc-btn-secondary:hover {
+  border-color: rgba(165, 216, 255, 0.45);
+  background-color: #1E243B;
+}

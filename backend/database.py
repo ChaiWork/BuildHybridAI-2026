@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
+import tempfile
 from datetime import datetime, timezone
 from typing import List, Dict, Any, Optional
 from models import (
@@ -27,7 +28,18 @@ from mission_ops import (
     hash_privacy_pin,
 )
 
-DB_PATH = os.environ.get("TARSCARE_DB_PATH") or os.path.join(os.path.dirname(__file__), "tarscare_local.db")
+def _resolve_default_db_path() -> str:
+    explicit = os.environ.get("TARSCARE_DB_PATH", "").strip()
+    if explicit:
+        return explicit
+    local_dir = os.path.dirname(__file__)
+    # Vercel Functions mount deployment files read-only; use writable temp storage in serverless runs.
+    if os.environ.get("VERCEL") or not os.access(local_dir, os.W_OK):
+        return os.path.join(tempfile.gettempdir(), "tarscare_local.db")
+    return os.path.join(local_dir, "tarscare_local.db")
+
+
+DB_PATH = _resolve_default_db_path()
 
 
 def get_conn() -> sqlite3.Connection:

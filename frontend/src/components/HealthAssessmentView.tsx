@@ -6,6 +6,7 @@ import {
   ChevronUp,
   ClipboardCheck,
   Eye,
+  HelpCircle,
   Link2,
   Link2Off,
   Mic,
@@ -33,6 +34,8 @@ import {
   startVoiceCommandListener,
 } from './voiceHelpers';
 
+import { GuideSection } from './HealthGuideModal';
+
 interface HealthAssessmentViewProps {
   state: FullSystemState;
   focusedRegionId?: string;
@@ -40,6 +43,7 @@ interface HealthAssessmentViewProps {
   onOpenEmergency: (hazardName?: string) => void;
   onOpenSansModal?: () => void;
   onOpenDevices?: (opts?: { category?: string; deviceId?: string }) => void;
+  onOpenGuide?: (section?: GuideSection, stepId?: string) => void;
 }
 
 const QUICK_CONNECT_DEVICES = [
@@ -166,6 +170,7 @@ export const HealthAssessmentView: React.FC<HealthAssessmentViewProps> = ({
   onOpenEmergency,
   onOpenSansModal,
   onOpenDevices,
+  onOpenGuide,
 }) => {
   const { latest_telemetry: latest, assessment } = state;
 
@@ -609,15 +614,27 @@ export const HealthAssessmentView: React.FC<HealthAssessmentViewProps> = ({
               Connect compatible medical instruments, start guided examinations, import CSV/JSON exports, or use manual entry below.
             </p>
           </div>
-          {onOpenDevices && (
-            <button
-              type="button"
-              onClick={() => onOpenDevices({ category: 'all' })}
-              className="px-3 py-1.5 rounded-lg text-xs font-medium bg-[#181C2E] border border-[#A5D8FF]/30 text-[#A5D8FF] hover:border-[#A5D8FF]"
-            >
-              Open Full 20-Device Catalogue →
-            </button>
-          )}
+          <div className="flex flex-wrap items-center gap-2">
+            {onOpenGuide && (
+              <button
+                type="button"
+                onClick={() => onOpenGuide('measure', 'assessment')}
+                className="px-3 py-1.5 rounded-lg text-xs font-medium bg-[#0B0D1A] border border-white/15 text-[#E5E5E4] hover:border-[#A5D8FF]/45 hover:text-[#FAF9FA] inline-flex items-center gap-1.5"
+              >
+                <HelpCircle className="w-3.5 h-3.5 text-[#A5D8FF]" />
+                <span>How to Measure &amp; Read Indicators</span>
+              </button>
+            )}
+            {onOpenDevices && (
+              <button
+                type="button"
+                onClick={() => onOpenDevices({ category: 'all' })}
+                className="px-3 py-1.5 rounded-lg text-xs font-medium bg-[#181C2E] border border-[#A5D8FF]/30 text-[#A5D8FF] hover:border-[#A5D8FF]"
+              >
+                Open Full 20-Device Catalogue →
+              </button>
+            )}
+          </div>
         </div>
 
         <div className="flex flex-wrap gap-2" role="tablist" aria-label="Health data collection methods">
@@ -1245,7 +1262,7 @@ export const HealthAssessmentView: React.FC<HealthAssessmentViewProps> = ({
         </div>
 
         {exp && (
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-3.5">
+          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-5 gap-4">
             <div className="rounded-xl bg-[#0B0D1A] p-4 space-y-1.5">
               <div className="text-xs font-semibold text-[#A5D8FF]">What was detected</div>
               <ul className="text-xs text-[#FAF9FA] space-y-1 leading-relaxed">

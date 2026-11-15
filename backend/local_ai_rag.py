@@ -13,8 +13,38 @@ import os
 import re
 import threading
 import time
+import urllib.error
 import urllib.request
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
+
+DOTENV_PATH = Path(__file__).resolve().parent / ".env"
+GROQ_CHAT_COMPLETIONS_URL = "https://api.groq.com/openai/v1/chat/completions"
+DEFAULT_GROQ_MODEL = "qwen/qwen3.8-27b"
+GROQ_CHAT_MODELS: List[Dict[str, str]] = [
+    {
+        "id": "qwen/qwen3.8-27b",
+        "label": "qwen/qwen3.8-27b (Recommended · 131K · Fast)",
+        "reason": "Fast (~300 ms), 131K context, accurate scientific citations, and low token footprint under 8K TPM limits.",
+    },
+    {
+        "id": "openai/gpt-oss-120b",
+        "label": "openai/gpt-oss-120b (120B Reasoning · 131K)",
+        "reason": "Highest reasoning capacity; runs with low reasoning effort to conserve 8K TPM budget.",
+    },
+    {
+        "id": "openai/gpt-oss-20b",
+        "label": "openai/gpt-oss-20b (20B Reasoning · 131K)",
+        "reason": "Mid-sized reasoning model (8K TPM / 200K TPD).",
+    },
+    {
+        "id": "allam-2-7b",
+        "label": "allam-2-7b (7B Fast · 7K RPD / 500K TPD)",
+        "reason": "Compact 7B model with high daily request/token headroom (4K context).",
+    },
+]
+GROQ_CHAT_MODEL_IDS: List[str] = [item["id"] for item in GROQ_CHAT_MODELS]
+_LAST_GROQ_ERROR: Optional[str] = None
 
 _ST_MODEL = None
 _ST_LOADING = False
@@ -456,9 +486,89 @@ def _probe_sentence_transformer(load_if_cached: bool = False, wait_seconds: floa
             _ST_READY_EVENT.wait(timeout=wait_seconds)
 
 
+def _read_dotenv_var(var_name: str, env_path: Path = DOTENV_PATH) -> str:
+    if not env_path.exists():
+        return ""
+    try:
+        for raw_line in env_path.read_text(encoding="utf-8").splitlines():
+            line = raw_line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            k, v = line.split("=", 1)
+            if k.strip() == var_name:
+                cleaned = v.strip().strip('"').strip("'")
+                if cleaned:
+                    return cleaned
+    except OSError:
+        return ""
+    return ""
+
+
+def resolve_groq_api_key() -> Tuple[str, str]:
+    """
+    Resolve GROQ_API_KEY without exposing it to frontend callers.
+    Priority: local SQLite config -> process env var -> backend/.env.
+    """
+    try:
+        import database
+
+        stored = database.fetch_system_state("ai_config")
+        if isinstance(stored, dict):
+            key_val = str(stored.get("groq_api_key") or "").strip()
+            if key_val:
+                return key_val, "LOCAL_CONFIG"
+    except Exception:
+        pass
+
+    env_val = os.environ.get("GROQ_API_KEY", "").strip()
+    if env_val:
+        return env_val, "ENV_VAR"
+
+    dotenv_val = _read_dotenv_var("GROQ_API_KEY")
+    if dotenv_val:
+        return dotenv_val, "DOTENV_FILE"
+
+    return "", "NONE"
+
+
+def redact_groq_api_key(api_key: str) -> str:
+    if not api_key:
+        return "Not configured"
+    if len(api_key) <= 10:
+        return "Configured (****)"
+    return f"Configured ({api_key[:4]}...{api_key[-4:]})"
+
+
+def _resolve_default_groq_model() -> str:
+    env_model = (os.environ.get("TARSCARE_API_MODEL") or _read_dotenv_var("TARSCARE_API_MODEL")).strip()
+    if env_model:
+        return env_model
+    return DEFAULT_GROQ_MODEL
+
+
+def _is_comm_blackout() -> bool:
+    try:
+        import database
+
+        comm_state = database.fetch_system_state("comm_state") or {}
+        return bool(
+            comm_state.get("offline_mode_forced")
+            or str(comm_state.get("earth_comm_status", "")).upper() == "CONJUNCTION_BLACKOUT"
+        )
+    except Exception:
+        return False
+
+
 def get_ai_config() -> Dict[str, Any]:
-    """Read persisted AI engine settings (llm_enabled, selected_model) from SQLite system_state."""
-    cfg: Dict[str, Any] = {"llm_enabled": True, "selected_model": None}
+    """Read persisted AI engine settings (llm_enabled, llm_provider, selected_model, selected_api_model) from SQLite."""
+    has_groq = bool(resolve_groq_api_key()[0])
+    default_api_model = _resolve_default_groq_model()
+    cfg: Dict[str, Any] = {
+        "llm_enabled": True,
+        "llm_provider": "api" if has_groq else "local",
+        "selected_model": None,
+        "selected_api_model": default_api_model,
+    }
     try:
         import database
 
@@ -466,8 +576,15 @@ def get_ai_config() -> Dict[str, Any]:
         if isinstance(stored, dict):
             if "llm_enabled" in stored:
                 cfg["llm_enabled"] = bool(stored["llm_enabled"])
+            prov = str(stored.get("llm_provider") or "").strip().lower()
+            if prov in {"local", "api"}:
+                cfg["llm_provider"] = prov
             if stored.get("selected_model"):
                 cfg["selected_model"] = str(stored["selected_model"])
+            if stored.get("selected_api_model"):
+                cfg["selected_api_model"] = str(stored["selected_api_model"])
+            if stored.get("groq_api_key"):
+                cfg["groq_api_key"] = str(stored["groq_api_key"])
     except Exception:
         pass
     return cfg
@@ -475,18 +592,38 @@ def get_ai_config() -> Dict[str, Any]:
 
 def set_ai_config(
     llm_enabled: Optional[bool] = None,
+    llm_provider: Optional[str] = None,
     selected_model: Optional[str] = None,
     clear_selected_model: bool = False,
+    selected_api_model: Optional[str] = None,
+    clear_selected_api_model: bool = False,
+    groq_api_key: Optional[str] = None,
+    clear_groq_api_key: bool = False,
 ) -> Dict[str, Any]:
     """Persist AI preferences into SQLite and invalidate the Ollama tags probe cache."""
     global _OLLAMA_CACHE_TS
     cfg = get_ai_config()
     if llm_enabled is not None:
         cfg["llm_enabled"] = bool(llm_enabled)
+    if llm_provider is not None:
+        clean_prov = llm_provider.strip().lower()
+        if clean_prov not in {"local", "api"}:
+            raise ValueError("llm_provider must be 'local' or 'api'.")
+        cfg["llm_provider"] = clean_prov
     if clear_selected_model:
         cfg["selected_model"] = None
     elif selected_model is not None:
         cfg["selected_model"] = selected_model.strip() or None
+    if clear_selected_api_model:
+        cfg["selected_api_model"] = _resolve_default_groq_model()
+    elif selected_api_model is not None:
+        cfg["selected_api_model"] = selected_api_model.strip() or _resolve_default_groq_model()
+    if clear_groq_api_key:
+        cfg.pop("groq_api_key", None)
+    elif groq_api_key is not None:
+        cleaned_key = groq_api_key.strip()
+        if cleaned_key:
+            cfg["groq_api_key"] = cleaned_key
     try:
         import database
 
@@ -494,7 +631,9 @@ def set_ai_config(
     except Exception:
         pass
     _OLLAMA_CACHE_TS = 0.0
-    return cfg
+    public_cfg = dict(cfg)
+    public_cfg.pop("groq_api_key", None)
+    return public_cfg
 
 
 def _is_embedding_model(model_name: str, details: Optional[Dict[str, Any]] = None) -> bool:
@@ -532,6 +671,8 @@ def _select_active_chat_model(chat_models: List[str], preferred: Optional[str]) 
 def _probe_ollama_registry(force: bool = False) -> Dict[str, Any]:
     """Fast 0.5s probe against local Ollama daemon (127.0.0.1:11434/api/tags), cached 12s."""
     global _OLLAMA_CACHE_TS, _OLLAMA_PROBE_CACHE
+    if os.environ.get("VERCEL"):
+        return {"reachable": False, "chat_models": [], "embed_models": []}
     now = time.time()
     if not force and (now - _OLLAMA_CACHE_TS) < 12.0:
         return dict(_OLLAMA_PROBE_CACHE)
@@ -578,27 +719,67 @@ def get_local_ai_status(force_probe: bool = False) -> Dict[str, Any]:
     reg = _probe_ollama_registry(force=force_probe)
     cfg = get_ai_config()
     llm_enabled = bool(cfg.get("llm_enabled", True))
-    active_model = _select_active_chat_model(reg["chat_models"], cfg.get("selected_model"))
-    embed_ready = _ST_CACHED or bool(reg["embed_models"])
-    ollama_active = bool(reg["reachable"] and active_model and llm_enabled)
+    llm_provider = str(cfg.get("llm_provider") or "local").lower()
+    if llm_provider not in {"local", "api"}:
+        llm_provider = "local"
 
-    if ollama_active and embed_ready:
+    active_ollama_model = _select_active_chat_model(reg["chat_models"], cfg.get("selected_model"))
+    embed_ready = _ST_CACHED or bool(reg["embed_models"])
+    ollama_available = bool(reg["reachable"] and active_ollama_model is not None)
+
+    groq_key, groq_key_source = resolve_groq_api_key()
+    api_key_configured = bool(groq_key)
+    blackout = _is_comm_blackout()
+    api_model = str(cfg.get("selected_api_model") or _resolve_default_groq_model())
+    api_models_list = list(GROQ_CHAT_MODEL_IDS)
+    if api_model and api_model not in api_models_list:
+        api_models_list.insert(0, api_model)
+
+    api_active = bool(llm_provider == "api" and llm_enabled and api_key_configured and not blackout)
+    ollama_active = bool(llm_provider == "local" and llm_enabled and ollama_available)
+    llm_active = api_active or ollama_active
+
+    if api_active and embed_ready:
+        mode = "GROQ_API_PLUS_EMBEDDINGS"
+        active_prov = "api_groq"
+    elif api_active:
+        mode = "GROQ_API_PLUS_TFIDF"
+        active_prov = "api_groq"
+    elif ollama_active and embed_ready:
         mode = "LOCAL_OLLAMA_PLUS_EMBEDDINGS"
+        active_prov = "local_ollama"
     elif ollama_active:
         mode = "LOCAL_OLLAMA_PLUS_TFIDF"
+        active_prov = "local_ollama"
     elif embed_ready:
         mode = "OFFLINE_SENTENCE_TRANSFORMERS"
+        active_prov = "offline_fallback"
     else:
         mode = "DETERMINISTIC_OFFLINE_RAG"
+        active_prov = "offline_fallback"
 
     return {
-        "ollama_available": bool(reg["reachable"] and active_model is not None),
+        "ollama_available": ollama_available,
         "ollama_reachable": bool(reg["reachable"]),
-        "ollama_model": active_model,
+        "ollama_model": active_ollama_model,
         "installed_chat_models": reg["chat_models"],
         "installed_embed_models": reg["embed_models"],
+        "llm_provider": llm_provider,
+        "active_provider": active_prov,
+        "api_provider": "groq",
+        "api_available": api_key_configured,
+        "api_reachable": bool(api_key_configured and not blackout),
+        "api_blocked_blackout": blackout,
+        "api_model": api_model,
+        "available_api_models": api_models_list,
+        "api_model_catalog": GROQ_CHAT_MODELS,
+        "api_key_configured": api_key_configured,
+        "api_key_status": redact_groq_api_key(groq_key),
+        "api_key_source": groq_key_source,
+        "last_api_error": _LAST_GROQ_ERROR,
+        "active_model_display": api_model if api_active else (active_ollama_model if ollama_active else None),
         "llm_enabled": llm_enabled,
-        "llm_active": ollama_active,
+        "llm_active": llm_active,
         "sentence_transformers_installed": _ST_INSTALLED,
         "sentence_transformers_cached": _ST_CACHED,
         "embeddings_loaded": _ST_MODEL is not None or bool(reg["embed_models"]),
@@ -847,6 +1028,13 @@ def _verify_and_finalize_llm_answer(
     5) Verify cited [DOC-ID] tags match retrieved sources & trim incomplete trailing cuts.
     """
     text = (raw_text or "").strip()
+    text = re.sub(r"(?is)<think>.*?</think>", "", text).strip()
+    # Normalize typographic dashes inside bracketed citation IDs (e.g. U+2011 non-breaking hyphen)
+    text = re.sub(
+        r"\[([A-Za-z0-9\u2010-\u2013_-]+)\]",
+        lambda m: "[" + re.sub(r"[\u2010-\u2013]", "-", m.group(1)) + "]",
+        text,
+    )
     if len(text) < 25:
         return None
     if _PRESCRIPTION_LEAK_RE.search(text):
@@ -925,22 +1113,11 @@ def _verify_and_finalize_llm_answer(
     return text
 
 
-def synthesize_with_ollama(
+def _build_rag_messages(
     question: str,
     citations: List[Dict[str, Any]],
     astronaut_context: Optional[Dict[str, Any]] = None,
-) -> Optional[Dict[str, Any]]:
-    """
-    Generate grounded synthesis via local Ollama /api/chat with separated system/user roles,
-    conversation history window, persistent keep_alive, and post-LLM safety verification.
-    """
-    cfg = get_ai_config()
-    if not cfg.get("llm_enabled", True):
-        return None
-    model_name = _probe_ollama()
-    if not model_name or not citations:
-        return None
-
+) -> List[Dict[str, str]]:
     context_lines = "\n\n".join(
         f"[{c['doc_id']}] ({c['agency']}, {c['year']}) {c['title']}:\n{c['excerpt']}"
         for c in citations[:4]
@@ -955,7 +1132,7 @@ def synthesize_with_ollama(
         "4. Distinguish physical absorbed dose (Gy / mGy) from biological equivalent/effective dose (Sv / mSv); never invent NASA exposure limits.\n"
         "5. Never treat ARMAS Earth atmospheric aircraft radiation data as direct Mars surface telemetry, and explicitly identify synthetic demo vs. user-entered telemetry.\n"
         "6. Never diagnose psychiatric disorders or clinical infections from sensors, NEVER guarantee health outcomes, and NEVER prescribe medications or drug dosages.\n"
-        "7. Keep answers concise, complete (finish every sentence), clearly separated between scientific evidence and operational procedure, and practical for autonomous crew action."
+        "7. Keep answers concise, clear plain prose or clean bullet points (no markdown tables), complete every sentence, clearly separate scientific evidence from operational procedure, and keep guidance practical for autonomous crew action."
     )
 
     messages: List[Dict[str, str]] = [{"role": "system", "content": system_prompt}]
@@ -972,7 +1149,100 @@ def synthesize_with_ollama(
         f"ASTRONAUT QUESTION:\n{question}"
     )
     messages.append({"role": "user", "content": user_content})
+    return messages
 
+
+def call_groq_chat(
+    messages: List[Dict[str, str]],
+    model: Optional[str] = None,
+    temperature: float = 0.15,
+    max_tokens: int = 1200,
+    timeout: float = 25.0,
+) -> Optional[Dict[str, Any]]:
+    """Call Groq OpenAI-compatible chat completions API using server-side GROQ_API_KEY."""
+    global _LAST_GROQ_ERROR
+    if _is_comm_blackout():
+        _LAST_GROQ_ERROR = "Blocked during OFFLINE Solar Conjunction Blackout."
+        return None
+    api_key, _ = resolve_groq_api_key()
+    if not api_key:
+        _LAST_GROQ_ERROR = "GROQ_API_KEY is not configured."
+        return None
+
+    cfg = get_ai_config()
+    target_model = (model or cfg.get("selected_api_model") or _resolve_default_groq_model()).strip()
+    body_obj: Dict[str, Any] = {
+        "model": target_model,
+        "messages": messages,
+        "temperature": temperature,
+        "max_completion_tokens": max_tokens,
+    }
+    if "gpt-oss" in target_model.lower():
+        body_obj["reasoning_effort"] = "low"
+
+    payload = json.dumps(body_obj).encode("utf-8")
+    started = time.perf_counter()
+    try:
+        req = urllib.request.Request(
+            GROQ_CHAT_COMPLETIONS_URL,
+            data=payload,
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+                "User-Agent": "TARSCareAI/1.0",
+            },
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            choices = data.get("choices") or []
+            raw_content = ((choices[0].get("message") or {}).get("content") or "") if choices else ""
+            cleaned = re.sub(r"(?is)<think>.*?</think>", "", str(raw_content)).strip()
+            if not cleaned:
+                _LAST_GROQ_ERROR = f"Empty completion returned by {target_model}."
+                return None
+            _LAST_GROQ_ERROR = None
+            latency_ms = int(round((time.perf_counter() - started) * 1000))
+            return {
+                "content": cleaned,
+                "model": str(data.get("model") or target_model),
+                "latency_ms": latency_ms,
+                "provider": "api",
+            }
+    except urllib.error.HTTPError as exc:
+        err_msg = f"HTTP {exc.code}"
+        try:
+            err_body = exc.read().decode("utf-8", errors="ignore")
+            parsed = json.loads(err_body)
+            detail = (parsed.get("error") or {}).get("message")
+            if detail:
+                err_msg = f"HTTP {exc.code}: {str(detail)[:180]}"
+        except Exception:
+            pass
+        _LAST_GROQ_ERROR = err_msg
+        return None
+    except Exception as exc:
+        _LAST_GROQ_ERROR = str(exc)[:180]
+        return None
+
+
+def synthesize_with_ollama(
+    question: str,
+    citations: List[Dict[str, Any]],
+    astronaut_context: Optional[Dict[str, Any]] = None,
+) -> Optional[Dict[str, Any]]:
+    """
+    Generate grounded synthesis via local Ollama /api/chat with separated system/user roles,
+    conversation history window, persistent keep_alive, and post-LLM safety verification.
+    """
+    cfg = get_ai_config()
+    if not cfg.get("llm_enabled", True):
+        return None
+    model_name = _probe_ollama()
+    if not model_name or not citations:
+        return None
+
+    messages = _build_rag_messages(question, citations, astronaut_context)
     payload = json.dumps(
         {
             "model": model_name,
@@ -1002,9 +1272,49 @@ def synthesize_with_ollama(
                 "answer": verified,
                 "model": model_name,
                 "latency_ms": latency_ms,
+                "provider": "local",
             }
     except Exception:
         return None
+
+
+def synthesize_with_groq(
+    question: str,
+    citations: List[Dict[str, Any]],
+    astronaut_context: Optional[Dict[str, Any]] = None,
+) -> Optional[Dict[str, Any]]:
+    """Generate grounded RAG synthesis via Groq API with full post-generation safety gate."""
+    cfg = get_ai_config()
+    if not cfg.get("llm_enabled", True) or not citations:
+        return None
+    messages = _build_rag_messages(question, citations, astronaut_context)
+    api_res = call_groq_chat(messages, temperature=0.15, max_tokens=1200, timeout=25.0)
+    if not api_res:
+        return None
+    verified = _verify_and_finalize_llm_answer(api_res["content"], question, citations, astronaut_context)
+    if not verified:
+        return None
+    return {
+        "answer": verified,
+        "model": api_res["model"],
+        "latency_ms": api_res["latency_ms"],
+        "provider": "api",
+    }
+
+
+def synthesize_with_llm(
+    question: str,
+    citations: List[Dict[str, Any]],
+    astronaut_context: Optional[Dict[str, Any]] = None,
+) -> Optional[Dict[str, Any]]:
+    """Dispatch RAG synthesis cleanly to configured provider ('api' Groq or 'local' Ollama)."""
+    cfg = get_ai_config()
+    if not cfg.get("llm_enabled", True) or not citations:
+        return None
+    provider = str(cfg.get("llm_provider") or "local").lower()
+    if provider == "api":
+        return synthesize_with_groq(question, citations, astronaut_context)
+    return synthesize_with_ollama(question, citations, astronaut_context)
 
 
 def synthesize_with_ollama_if_available(
@@ -1014,6 +1324,64 @@ def synthesize_with_ollama_if_available(
 ) -> Optional[str]:
     res = synthesize_with_ollama(question, citations, astronaut_context)
     return res["answer"] if res else None
+
+
+def warmup_api_model(model_name: Optional[str] = None) -> Dict[str, Any]:
+    """Run a lightweight connectivity & latency probe against Groq API."""
+    cfg = get_ai_config()
+    target = (model_name or cfg.get("selected_api_model") or _resolve_default_groq_model()).strip()
+    if _is_comm_blackout():
+        return {
+            "ok": False,
+            "model": target,
+            "latency_ms": 0,
+            "message": "External Groq API paused while Link Status is OFFLINE (Solar Conjunction Blackout). Switch Link Status to Delayed or Connected, or use Local LLM.",
+            "status": get_local_ai_status(force_probe=True),
+        }
+    api_key, _ = resolve_groq_api_key()
+    if not api_key:
+        return {
+            "ok": False,
+            "model": target,
+            "latency_ms": 0,
+            "message": "GROQ_API_KEY is not configured in backend/.env or local config.",
+            "status": get_local_ai_status(force_probe=True),
+        }
+
+    res = call_groq_chat(
+        messages=[{"role": "user", "content": "Reply with OK."}],
+        model=target,
+        temperature=0.0,
+        max_tokens=32,
+        timeout=15.0,
+    )
+    if res:
+        return {
+            "ok": True,
+            "model": res["model"],
+            "latency_ms": res["latency_ms"],
+            "message": f"Groq API {res['model']} verified ready ({res['latency_ms']} ms).",
+            "status": get_local_ai_status(force_probe=True),
+        }
+    return {
+        "ok": False,
+        "model": target,
+        "latency_ms": 0,
+        "message": f"Groq API check failed for {target}: {_LAST_GROQ_ERROR or 'Connection failed'}",
+        "status": get_local_ai_status(force_probe=True),
+    }
+
+
+def warmup_ai_model(
+    model_name: Optional[str] = None,
+    provider: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Warm up local Ollama or verify external Groq API depending on active/requested provider."""
+    cfg = get_ai_config()
+    eff_provider = (provider or cfg.get("llm_provider") or "local").strip().lower()
+    if eff_provider == "api":
+        return warmup_api_model(model_name=model_name)
+    return warmup_ollama_model(model_name=model_name)
 
 
 def warmup_ollama_model(model_name: Optional[str] = None) -> Dict[str, Any]:

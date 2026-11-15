@@ -11,7 +11,7 @@ Preserves all existing TARS Care AI endpoints while adding MarsCare UI-facing ro
 from __future__ import annotations
 from dataclasses import asdict
 from typing import Any, Dict, List, Optional, Tuple
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
 import database
@@ -22,8 +22,8 @@ from local_ai_rag import (
     get_dense_scores,
     get_local_ai_status,
     set_ai_config,
-    synthesize_with_ollama,
-    warmup_ollama_model,
+    synthesize_with_llm,
+    warmup_ai_model,
 )
 from marscare_enhancer import normalize_comm_mode
 from models import (
@@ -268,11 +268,18 @@ def initialize_marscare_rag() -> None:
         sci_evidence, op_procedures = knowledge_base.rag_engine.split_evidence_and_procedures(citations, rich_ctx)
 
         if allow_llm and ai_status["llm_active"] and citations:
-            synth = synthesize_with_ollama(question, citations, rich_ctx)
+            synth = synthesize_with_llm(question, citations, rich_ctx)
             if synth:
                 answer_text = synth["answer"]
                 if conflict_notice and "conflict notice" not in answer_text.lower() and "regime" not in answer_text.lower():
                     answer_text = f"{answer_text}\n\nSource & Regime Conflict Notice: {conflict_notice}"
+                synth_notice = (
+                    "Non-diagnostic evidence summary synthesized via Groq API from locally stored NASA HRP, CSA & operational references. "
+                    "Prototype decision rules are not clinically validated."
+                    if synth.get("provider") == "api"
+                    else "Non-diagnostic evidence summary synthesized locally via Ollama from stored NASA HRP, CSA & operational references. "
+                    "Prototype decision rules are not clinically validated."
+                )
                 return {
                     "query": question,
                     "engine_mode": ai_status["active_engine_mode"],
@@ -283,10 +290,7 @@ def initialize_marscare_rag() -> None:
                     "scientific_evidence": sci_evidence,
                     "operational_procedures": op_procedures,
                     "answer": answer_text,
-                    "safety_notice": (
-                        "Non-diagnostic evidence summary synthesized locally via Ollama from stored NASA HRP, CSA & operational references. "
-                        "Prototype decision rules are not clinically validated."
-                    ),
+                    "safety_notice": synth_notice,
                     "citations": citations[:3],
                 }
 
@@ -360,12 +364,18 @@ class ReportGenerateRequest(BaseModel):
 
 class AIConfigRequest(BaseModel):
     llm_enabled: Optional[bool] = None
+    llm_provider: Optional[str] = None  # "local" | "api"
     selected_model: Optional[str] = None
     clear_selected_model: bool = False
+    selected_api_model: Optional[str] = None
+    clear_selected_api_model: bool = False
+    groq_api_key: Optional[str] = Field(default=None, max_length=256)
+    clear_groq_api_key: bool = False
 
 
 class AIWarmupRequest(BaseModel):
     model: Optional[str] = None
+    provider: Optional[str] = None
 
 
 @marscare_router.get("/ai/status")
@@ -375,17 +385,31 @@ def api_ai_status() -> Dict[str, Any]:
 
 @marscare_router.post("/ai/config")
 def api_set_ai_config(req: AIConfigRequest) -> Dict[str, Any]:
+    if req.llm_provider is not None and req.llm_provider.strip().lower() not in {"local", "api"}:
+        raise HTTPException(status_code=400, detail="llm_provider must be 'local' or 'api'.")
+    if req.groq_api_key is not None and not req.clear_groq_api_key:
+        cleaned_key = req.groq_api_key.strip()
+        if cleaned_key and len(cleaned_key) < 10:
+            raise HTTPException(status_code=400, detail="GROQ_API_KEY must be at least 10 characters.")
     set_ai_config(
         llm_enabled=req.llm_enabled,
+        llm_provider=req.llm_provider,
         selected_model=req.selected_model,
         clear_selected_model=req.clear_selected_model,
+        selected_api_model=req.selected_api_model,
+        clear_selected_api_model=req.clear_selected_api_model,
+        groq_api_key=req.groq_api_key,
+        clear_groq_api_key=req.clear_groq_api_key,
     )
     return get_local_ai_status(force_probe=True)
 
 
 @marscare_router.post("/ai/warmup")
 def api_warmup_ai(req: Optional[AIWarmupRequest] = None) -> Dict[str, Any]:
-    return warmup_ollama_model(req.model if req else None)
+    return warmup_ai_model(
+        req.model if req else None,
+        req.provider if req else None,
+    )
 
 
 @marscare_router.post("/comm/mode")

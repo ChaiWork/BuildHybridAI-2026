@@ -20,7 +20,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 import database
-from local_ai_rag import _probe_ollama, get_ai_config, get_local_ai_status
+from local_ai_rag import _probe_ollama, call_groq_chat, get_ai_config, get_local_ai_status
 from models import DataProvenance, RiskLevel
 
 FOOD_CATEGORIES = [
@@ -2989,6 +2989,17 @@ def astronautonaut_safe_name(name: str) -> str:
     return (name or "Astronaut").strip()
 
 
+def _is_safe_companion_reply(raw_text: str, exercise_contraindicated: bool) -> bool:
+    if len(raw_text) < 20:
+        return False
+    low = raw_text.lower()
+    if any(bad in low for bad in ("i am a licensed therapist", "i am human", "i diagnose you with", "clinical depression diagnosis")):
+        return False
+    if exercise_contraindicated and any(ex in low for ex in ("go for a run", "do a workout", "ared workout", "strenuous exercise")):
+        return False
+    return True
+
+
 def _synthesize_companion_with_ollama(
     user_message: str,
     history_messages: List[Dict[str, Any]],
@@ -3003,8 +3014,9 @@ def _synthesize_companion_with_ollama(
     cfg = get_ai_config()
     if not cfg.get("llm_enabled", True):
         return None
-    model_name = _probe_ollama()
-    if not model_name:
+    provider = str(cfg.get("llm_provider") or "local").lower()
+    model_name = None if provider == "api" else _probe_ollama()
+    if provider == "local" and not model_name:
         return None
 
     context_parts = [
@@ -3043,6 +3055,19 @@ def _synthesize_companion_with_ollama(
             messages.append({"role": r, "content": c[:500]})
     messages.append({"role": "user", "content": user_message})
 
+    if provider == "api":
+        api_res = call_groq_chat(messages, temperature=0.35, max_tokens=700, timeout=25.0)
+        if not api_res:
+            return None
+        raw_text = api_res["content"]
+        if not _is_safe_companion_reply(raw_text, exercise_contraindicated):
+            return None
+        return {
+            "reply": raw_text,
+            "engine_used": f"GROQ_API ({api_res['model']})",
+            "latency_ms": api_res["latency_ms"],
+        }
+
     payload = json.dumps(
         {
             "model": model_name,
@@ -3064,13 +3089,7 @@ def _synthesize_companion_with_ollama(
         with urllib.request.urlopen(req, timeout=35.0) as resp:
             body = json.loads(resp.read().decode("utf-8"))
             raw_text = ((body.get("message") or {}).get("content") or "").strip()
-            if len(raw_text) < 20:
-                return None
-            # Safety gate: reject clinical diagnosis claims, human claims, or unsafe exercise during exercise hold
-            low = raw_text.lower()
-            if any(bad in low for bad in ("i am a licensed therapist", "i am human", "i diagnose you with", "clinical depression diagnosis")):
-                return None
-            if exercise_contraindicated and any(ex in low for ex in ("go for a run", "do a workout", "ared workout", "strenuous exercise")):
+            if not _is_safe_companion_reply(raw_text, exercise_contraindicated):
                 return None
             latency_ms = int(round((time.perf_counter() - started) * 1000))
             return {
