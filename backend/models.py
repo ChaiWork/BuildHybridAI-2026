@@ -225,6 +225,7 @@ class RAGQueryInput(BaseModel):
     hazard_filter: Optional[str] = None
     include_astronaut_context: bool = True
     history: List[RAGChatMessage] = Field(default_factory=list)
+    retrieval_only: bool = False
 
 
 class SansAssessmentInput(BaseModel):

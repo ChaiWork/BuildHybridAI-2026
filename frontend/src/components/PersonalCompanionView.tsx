@@ -31,6 +31,7 @@ import {
   JournalEntryRecord,
 } from '../types';
 import { AIProviderSwitcher } from './AIProviderSwitcher';
+import { runPrivateOnDeviceReflection } from '../lib/firebaseHybridAI';
 
 interface Props {
   state: FullSystemState;
@@ -79,6 +80,12 @@ export const PersonalCompanionView: React.FC<Props> = ({
 
   // Journal Form State
   const [editingEntryUid, setEditingEntryUid] = useState<string | null>(null);
+  const [reflectingOnDevice, setReflectingOnDevice] = useState<boolean>(false);
+  const [privateJournalReflection, setPrivateJournalReflection] = useState<{
+    text: string;
+    engine: string;
+    latencyMs: number;
+  } | null>(null);
   const [journalForm, setJournalForm] = useState({
     title: '',
     content: '',
@@ -138,6 +145,16 @@ export const PersonalCompanionView: React.FC<Props> = ({
     setBusy(true);
     setBanner(null);
     try {
+      // Execute strictly on-device via Firebase AI Logic (InferenceMode.ONLY_ON_DEVICE)
+      // so sensitive crew behavioral conversations never transmit to cloud endpoints.
+      const onDeviceRes = await runPrivateOnDeviceReflection({
+        astronautName: state.astronaut.name,
+        sol: state.latest_telemetry.mission_day,
+        exerciseContraindicated: Boolean(state.assessment.exercise_contraindicated),
+        userText: messageText,
+        kind: 'COMPANION_CHAT',
+      });
+
       const res = await fetch(`${apiBase}/api/companion/chat`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -145,6 +162,8 @@ export const PersonalCompanionView: React.FC<Props> = ({
           message: messageText,
           conversation_uid: currentConversation?.conversation_uid || null,
           mode: modeOverride || chatMode,
+          client_on_device_reply: onDeviceRes.ok ? onDeviceRes.reply : null,
+          client_engine_used: onDeviceRes.ok ? onDeviceRes.engineLabel : null,
         }),
       });
       const data = await res.json();
@@ -858,6 +877,53 @@ export const PersonalCompanionView: React.FC<Props> = ({
                 <button type="submit" disabled={busy} className="mc-btn-primary w-full py-2.5">
                   {editingEntryUid ? 'Update Journal Entry' : 'Save Private Journal Entry'}
                 </button>
+
+                <button
+                  type="button"
+                  disabled={reflectingOnDevice || !journalForm.content.trim()}
+                  onClick={async () => {
+                    setReflectingOnDevice(true);
+                    setPrivateJournalReflection(null);
+                    try {
+                      const r = await runPrivateOnDeviceReflection({
+                        astronautName: state.astronaut.name,
+                        sol: state.latest_telemetry.mission_day,
+                        exerciseContraindicated: Boolean(state.assessment.exercise_contraindicated),
+                        userText: journalForm.content,
+                        kind: 'JOURNAL_REFLECTION',
+                      });
+                      setPrivateJournalReflection({
+                        text: r.ok
+                          ? r.reply
+                          : `Zero-Egress Privacy Boundary Active: ${r.errorReason || 'Chrome Gemini Nano 4 not yet downloaded — journal stayed 100% local and was NOT sent to Cloud.'}`,
+                        engine: r.engineLabel,
+                        latencyMs: r.latencyMs,
+                      });
+                    } finally {
+                      setReflectingOnDevice(false);
+                    }
+                  }}
+                  className="mc-btn-secondary w-full py-2 flex items-center justify-center gap-1.5 border border-[#A5D8FF]/35 text-[#A5D8FF]"
+                >
+                  <Lock className="w-3.5 h-3.5" />
+                  <span>
+                    {reflectingOnDevice
+                      ? 'Running Gemini Nano 4 On-Device...'
+                      : 'Reflect Privately On-Device (ONLY_ON_DEVICE)'}
+                  </span>
+                </button>
+
+                {privateJournalReflection && (
+                  <div className="rounded-xl bg-[#0B0D1A] border border-emerald-500/35 p-3 space-y-1.5">
+                    <div className="flex items-center justify-between text-[11px] text-emerald-300 font-semibold">
+                      <span>{privateJournalReflection.engine}</span>
+                      <span>{privateJournalReflection.latencyMs} ms</span>
+                    </div>
+                    <p className="text-xs text-[#FAF9FA] whitespace-pre-line leading-relaxed">
+                      {privateJournalReflection.text}
+                    </p>
+                  </div>
+                )}
               </form>
             </div>
 

@@ -1,94 +1,83 @@
-# TARS Care — AI Astronaut Health Companion
+# TARS Care — Hybrid On-Device & Cloud Astronaut Health Companion
 
-> **NASA Space Apps Challenge 2026 · Team Milky Has Its Own Way**
+[![License: Apache-2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
+
+> **#BuildHybridAI 2026 · Team Milky Has Its Own Way (`CHAI` & `TanSuChin`)**
 >
-> An offline-first, autonomous astronaut health-monitoring, self-assessment, and medical decision-support web application designed for long-duration deep-space and Mars missions.
+> A **multi-platform (`Web on Chrome` + `Native Android EVA Companion`)**, offline-first astronaut health-monitoring, self-assessment, and medical decision-support suite powered by the **Firebase AI Logic Hybrid Inference SDK** (`Gemini Nano 4` on-device + `Gemini Cloud` fallback), **Firebase App Check**, **Cloud Firestore** Store-and-Forward offline persistence, **Firebase Authentication**, and **Firebase Remote Config**.
 
-TARS Care unifies physiological and psychological telemetry, personal baseline tracking, NASA human-spaceflight hazard analysis, crew medical operations, and a citation-backed Retrieval-Augmented Generation (RAG) assistant in a single calm interface. Built to operate reliably across **Connected**, **Delayed (Mars nominal light-time)**, and **Offline (Conjunction Blackout)** states, it helps crew members answer three urgent questions at a glance: **How am I doing?**, **What has changed?**, and **Should I take any action?**
+TARS Care (*Telemetry, Autonomous Risk & Spaceflight Care*) unifies physiological and psychological telemetry, personal baseline tracking, five-hazard spaceflight analysis, crew medical operations, and a citation-backed Retrieval-Augmented Generation (RAG) assistant across **habitat workstations (`Web / Chrome`)** and **field wrist/handheld pads (`Android`)**. Built to operate seamlessly across **Connected**, **Delayed (4–22 min Mars light-time)**, and **Offline (Solar Conjunction Blackout)** link states, it answers three urgent questions at a glance: **How am I doing?**, **What has changed?**, and **Should I take any action?**
 
----
-
-## Table of Contents
-
-- [Features](#features)
-- [System Architecture](#system-architecture)
-- [Tech Stack](#tech-stack)
-- [Project Structure](#project-structure)
-- [Getting Started](#getting-started)
-  - [Prerequisites](#prerequisites)
-  - [Environment Variables](#environment-variables)
-  - [Installation & Running Locally](#installation--running-locally)
-- [Usage & Application Views](#usage--application-views)
-- [Deployment (Vercel)](#deployment-vercel)
-- [Testing & Verification](#testing--verification)
-- [Scientific Accuracy & Safety Guardrails](#scientific-accuracy--safety-guardrails)
-- [Contributing](#contributing)
-- [Team & License](#team--license)
+> **Earth-Analog Impact:** Beyond deep-space missions, the exact same hybrid architecture serves remote expedition medicine, submarine crews, polar research stations, offshore platforms, and disaster-response triage operating under intermittent connectivity and strict patient privacy constraints.
 
 ---
 
-## Features
+## What Was Built During `#BuildHybridAI 2026` (Existing App Disclosure)
 
-- **Three-Question Mission Overview & Interactive Body Map:** Answers *How am I doing?*, *What has changed?*, and *Should I take any action?* with an interactive 7-region anatomical centerpiece (`Head and Brain`, `Eyes`, `Heart`, `Lungs`, `Muscles`, `Bones`, `Whole Body`), 7/14/30-Sol trend charts, **EVA Readiness (`GO` / `CAUTION` / `HOLD`)**, and deterministic predictive threshold runways (`Cabin CO₂`, `Cumulative Radiation Budget`, `7-Sol Sleep Debt Recovery`, `Musculoskeletal Strength`).
-- **Multi-Modal Health Assessment:** Collect telemetry via **Simulated/Connected Medical Devices** (20 NASA/CSA instruments in `HARDWARE_CATALOG`), **Guided Medical Examinations** (including SANS Amsler grid, ocular tonometry, ultrasound, ergometer, and biosample workflows), or **Manual Entry & CSV/JSON Import** with unit and `Gy` vs. `Sv` validation.
-- **Five Spaceflight Hazards Monitoring:** Dedicated 4-step modules for **Space Radiation**, **Isolation & Confinement**, **Distance from Earth**, **Gravity Fields** (`1g` / `0g` / `0.38g` explorer + exercise-hold gating), and **Hostile & Closed Environments**.
-- **Hybrid Offline-First AI Health Assistant & Personal Companion:** Queries **28 pre-bundled documents** (NASA HRP, OSDR, RadLab, NLSP, EDA, CSA studies, plus `TARSCARE-SPEC-01`) using TF-IDF lexical scoring, optional locally cached `sentence-transformers` (`all-MiniLM-L6-v2`), and optional **Groq API** or **local Ollama** synthesis with automatic **deterministic offline RAG fallback**, `[DOC-ID]` citations, and post-generation safety gates. Includes a **Personal Companion** & **SHA-256 PIN-gated Journal** (`DEFAULT_DEMO_PIN = "2026"`).
-- **Food, Water & Medical Operations:** Tracks crew rations, potable water reserves, expiry alerts, nutrition targets, a 7-item onboard medical kit, multi-crew **CMO Triage Matrix** (`ARES-IV-SUCHAI`, `ARES-IV-VANCE`, `ARES-IV-CHEN`, `ARES-IV-OKAFOR`), and **Store-and-Forward Flight Surgeon Consult Packets**.
-- **Space Weather & Mars Environmental Feeds:** Server-side integration with **11 NASA DONKI space-weather feeds** and **NASA InSight Mars Weather** (`Elysium Planitia`), persisted in SQLite for offline viewing.
-- **Zero-Latency Emergency Triage:** High-contrast EVA emergency checklist modal with timer, offline Web Speech readout/voice capture, and client-side fallback when offline.
+Per **Official Rules Section 6 (New & Existing Projects)**, TARS Care builds upon our team's pre-existing NASA Space Apps prototype (`TanSuChin/NASASpaceChallenge2026-Milky_Has_Its_Own_Way`, originally Python FastAPI + SQLite + backend Groq/Ollama) and was **significantly re-architected during the `#BuildHybridAI 2026` submission period**:
+
+1. **Client-Side Firebase AI Logic Hybrid Inference Engine ([frontend/src/lib/firebaseHybridAI.ts](frontend/src/lib/firebaseHybridAI.ts)):**
+   - Replaced legacy backend-only Groq/Ollama toggling with runtime **`firebase/ai`** (`getAI`, `GoogleAIBackend`, `getGenerativeModel`, `InferenceMode`, `InferenceSource`, `Schema`) executing **Gemini Nano 4** locally in Chrome and seamlessly falling back to **Cloud Gemini (`gemini-3.5-flash-lite` / `gemini-2.5-flash` / `gemini-2.5-pro`)**.
+   - Added live **`initializeDeviceModel()`** Chrome Gemini Nano 4 download/warmup monitoring and real-time runtime `result.response.inferenceSource` telemetry badges (`ON_DEVICE` vs. `IN_CLOUD`).
+2. **Four Domain-Authentic Hybrid AI Workflows:**
+   - **`InferenceMode.PREFER_ON_DEVICE` Medical RAG ([AIHealthAssistantView.tsx](frontend/src/components/AIHealthAssistantView.tsx)):** Synthesizes retrieved excerpts from 28 NASA/CSA research documents locally on Gemini Nano 4 with zero token cost and zero network latency, falling back to Cloud Gemini on browsers/devices without Nano 4.
+   - **`InferenceMode.ONLY_ON_DEVICE` Zero-Egress Private Journal & Companion ([PersonalCompanionView.tsx](frontend/src/components/PersonalCompanionView.tsx)):** Enforces strict local execution so crew mental-health reflections and PIN-gated journals **never transmit over the network or leave device memory**.
+   - **Hybrid Structured JSON Intake (`Schema.object` + `PREFER_ON_DEVICE`, [HealthAssessmentView.tsx](frontend/src/components/HealthAssessmentView.tsx)):** Parses freeform natural-language/voice post-EVA logs directly into typed TARS Care vitals (`BPM`, `mmHg`, `SpO₂ %`, `CO₂ mmHg`) and selectable symptom chips both on-device and in-cloud.
+   - **`InferenceMode.PREFER_IN_CLOUD` Flight Surgeon Executive Brief ([CrewMedOpsView.tsx](frontend/src/components/CrewMedOpsView.tsx)):** Synthesizes longitudinal multi-Sol consultation briefs via Cloud Gemini when Deep Space Network link is active, falling back to on-device inference during blackout.
+3. **Full Supporting Firebase Suite (`App Check` + `Firestore` + `Auth` + `Remote Config`):**
+   - **Firebase App Check:** Configured with reCAPTCHA v3 / Enterprise + `FIREBASE_APPCHECK_DEBUG_TOKEN` / Android `DebugAppCheckProviderFactory` support for local and judge testing.
+   - **Cloud Firestore Store-and-Forward ([firestore.rules](firestore.rules)):** Wired TARS Care's `Connected` / `Delayed` / `Offline (Blackout)` switch directly to Firestore `enableNetwork()` / `disableNetwork()` with IndexedDB `persistentLocalCache`, queuing consult packets and EVA logs offline (`hasPendingWrites`) and syncing automatically upon reconnection.
+   - **Firebase Authentication & Remote Config:** Zero-friction anonymous crew session + optional Google Sign-In, plus Remote Config mission hazard thresholds (`co2_warn_mmhg`, `rad_warn_msv`, `cloud_fallback_model`).
+4. **New Native Android EVA Companion App ([android/](android/)):**
+   - Built a native **Kotlin + Jetpack Compose** Android field companion (`space.tarscare.eva`) powered by **`com.google.firebase:firebase-ai:18.2.0`** + **`com.google.firebase:firebase-ai-ondevice:16.0.0-beta08`**, running **Android Gemini Nano 4 (AICore)** for suit telemetry triage (`PREFER_ON_DEVICE`) and private crew journaling (`ONLY_ON_DEVICE`), synced live with the Web Habitat Console via **Cloud Firestore (`eva_logs`)**.
+5. **Open-Source Licensing & Repository Hygiene:**
+   - Licensed under **Apache License 2.0** ([LICENSE](LICENSE)), untracked all build caches/`node_modules`, and verified zero committed secrets.
 
 ---
 
-## System Architecture
+## Multi-Platform Hybrid Architecture
 
 ```mermaid
 flowchart TD
-    subgraph Frontend["Frontend (React 18 + TypeScript + Vite + Tailwind CSS + Recharts)"]
-        HM["Health & Monitoring: Overview, Assessment, Hazards, Medical Devices, Health History"]
-        MO["Mission & Operations: Food & Supplies, Distance from Earth, Crew & Med Ops"]
-        AP["AI & Personal: AI Health Assistant, Personal Companion, My Journal"]
-        EM["High-Contrast EVA Emergency Triage & Offline Voice Assist"]
+    subgraph Platforms["Multi-Platform Clients (Unified Firebase Hybrid SDK)"]
+        WEB["Web Habitat Workstation (Chrome + React + Vite + firebase/ai)"]
+        AND["Native Android EVA Companion (Kotlin + Compose + firebase-ai + firebase-ai-ondevice)"]
     end
 
-    subgraph Backend["Backend (Python + FastAPI + Pydantic)"]
-        API["REST API (/api/*)"]
-        ENG["5-Hazard + Cardiopulmonary Assessment Engine, EVA Readiness & Predictive Runways"]
-        HW["20-Instrument Hardware Adapter, Guided Exams & CSV/JSON Validator"]
-        DONKI["NASA DONKI (11 Feeds) & NASA InSight Mars Weather Sync"]
-        SUP["Food/Water Inventory, Store-and-Forward Comm & Personal Companion"]
-        RAG["Hybrid RAG Engine (TF-IDF + Optional Embeddings + Groq API / Local Ollama + Safety Gate)"]
+    subgraph HybridAI["Firebase AI Logic Hybrid Router + App Check"]
+        AC["Firebase App Check (reCAPTCHA / Play Integrity / Debug Token)"]
+        MODE{"Dynamic InferenceMode Policy"}
+        NANO["On-Device: Gemini Nano 4 (Chrome Prompt API & Android AICore)"]
+        CLOUD["Cloud Fallback: Gemini 3.5 Flash-Lite / 2.5 Pro (GoogleAIBackend)"]
     end
 
-    subgraph Storage["Local Persistence & Knowledge Corpus"]
-        DB[("SQLite (tarscare_local.db / /tmp on Vercel)")]
-        CORPUS[("28 Offline Docs (NASA/CSA Research + TARSCARE-SPEC-01)")]
+    subgraph FirebaseCloud["Firebase Cloud & Offline-First Services"]
+        FS[("Cloud Firestore (IndexedDB / Android Persistent Offline Cache)")]
+        AUTH["Firebase Auth (Anonymous Crew & Google Sign-In)"]
+        RC["Firebase Remote Config (CO₂ & Radiation Thresholds)"]
     end
 
-    Frontend <--> API
-    API --> ENG
-    API --> HW
-    API --> DONKI
-    API --> SUP
-    API --> RAG
-    ENG <--> DB
-    HW <--> DB
-    DONKI <--> DB
-    SUP <--> DB
-    RAG <--> CORPUS
+    subgraph ScienceBackend["Scientific RAG & Telemetry Engine (FastAPI + SQLite)"]
+        CORPUS[("28 Bundled NASA/CSA Docs + Medical Safety Gate")]
+        FEEDS["5-Hazard Engine + 20 Software-Simulated Medical Instruments + NASA DONKI/InSight"]
+    end
+
+    WEB --> AC --> MODE
+    AND --> AC
+    MODE -->|"ONLY_ON_DEVICE (Private Journal & Solar Blackout)"| NANO
+    MODE -->|"PREFER_ON_DEVICE (RAG Q&A & Structured JSON Intake)"| NANO
+    NANO -.->|"Auto Fallback when Nano Unavailable"| CLOUD
+    MODE -->|"PREFER_IN_CLOUD (Flight Surgeon Consult Brief)"| CLOUD
+
+    WEB <-->|"Store-and-Forward Sync (eva_logs & consult_packets)"| FS
+    AND <-->|"Offline EVA Field Sync"| FS
+    WEB <--> AUTH
+    AND <--> AUTH
+    RC --> WEB
+    RC --> AND
+    WEB <--> CORPUS
+    WEB <--> FEEDS
 ```
-
----
-
-## Tech Stack
-
-| Layer | Technologies | Why We Chose Them |
-| :--- | :--- | :--- |
-| **Frontend** | React 18, TypeScript, Vite, Tailwind CSS, Recharts, Lucide React, Host Grotesk | Fast SPA rendering, dark-ambient spacecraft readability, responsive layouts, and tabular-numeric telemetry charts. |
-| **Backend** | Python 3.10+, FastAPI, Pydantic | Typed API validation, lightweight runtime footprint, and clean integration with Vercel Python Functions. |
-| **Persistence** | SQLite (`sqlite3`) | Zero-infrastructure, offline-first persistence for 30 Sols of telemetry (`Sol 155–184`), baselines, device logs, food/med-kit reserves, and sync queues. |
-| **AI & Retrieval** | Custom TF-IDF + Hybrid Dense RAG, Groq API (`GROQ_API_KEY`), Optional Local Ollama & `sentence-transformers` | Guarantees deterministic, citation-verified answers offline while supporting cloud or local LLM synthesis when available. |
-| **Space Feeds** | NASA DONKI API, NASA InSight Mars Weather API | Grounds habitat and radiation views in real space-weather events and archival Mars surface telemetry with offline caching. |
-| **Deployment** | Vercel Services (`vercel.json`) | Ships the Vite SPA and FastAPI backend under a single origin (`/api/*` -> backend, `/*` -> frontend). |
 
 ---
 
@@ -96,169 +85,95 @@ flowchart TD
 
 ```text
 .
-├── backend/
-│   ├── assessment_engine.py    # 5-hazard rules, baseline deltas, EVA readiness & runways
-│   ├── database.py             # SQLite schema, migrations & 30-Sol synthetic crew seeder
-│   ├── donki_client.py         # NASA DONKI 11-feed concurrent client & SQLite cache
-│   ├── donki_routes.py         # /api/donki/* endpoints
-│   ├── hardware_devices.py     # 20-instrument NASA/CSA device catalog & simulation logic
-│   ├── hardware_routes.py      # /api/devices/* endpoints
-│   ├── insight_client.py       # NASA InSight Mars weather client & Sol parser
-│   ├── insight_routes.py       # /api/insight/* endpoints
-│   ├── knowledge_base.py       # Base NASA/CSA corpus & TF-IDF chunk retriever
-│   ├── local_ai_rag.py         # Hybrid RAG, Groq/Ollama integration & safety verifier
-│   ├── main.py                 # FastAPI entrypoint, core /api/* routes & serverless DB guard
-│   ├── marscare_enhancer.py    # Comm-mode normalization & recommendation prioritization
-│   ├── marscare_routes.py      # /api/ai/*, /api/assessment/evaluate, /api/history, /api/reports/*
-│   ├── mission_ops.py          # 4 crew profiles, SHA-256 PIN hashing, med kit & consult packets
-│   ├── models.py               # Pydantic schemas and enums
-│   ├── support_modules.py      # Food & water inventory, comm queue & companion/journal logic
-│   ├── support_routes.py       # /api/food/*, /api/comm/*, /api/companion/*, /api/journal/*
-│   ├── requirements.txt        # Minimal Python dependencies (fastapi, uvicorn, pydantic)
-│   └── tests/
-│       └── test_tarscare_safety.py  # Automated medical safety, RAG & API test suite
-├── frontend/
-│   ├── public/                 # Favicon and human anatomy visual asset
+├── android/                        # Native Android EVA Companion (Kotlin + Jetpack Compose)
+│   ├── app/
+│   │   ├── build.gradle.kts        # firebase-ai:18.2.0 + firebase-ai-ondevice:16.0.0-beta08 + App Check
+│   │   ├── google-services.json.example
+│   │   └── src/main/java/space/tarscare/eva/
+│   │       ├── MainActivity.kt             # 3-tab Compose Spacecraft UI (EVA Triage, Journal, Sync)
+│   │       └── TarsCareHybridEngine.kt     # Android Hybrid AI Router, App Check, Firestore & Remote Config
+│   ├── build.gradle.kts
+│   └── settings.gradle.kts
+├── backend/                        # Python FastAPI Scientific Retriever, 5-Hazard Engine & Safety Verifier
+│   ├── assessment_engine.py        # 5-hazard rules, baseline deltas, EVA readiness & predictive runways
+│   ├── database.py                 # SQLite schema & 30-Sol Ares-Horizon IV crew telemetry seeder
+│   ├── hardware_devices.py         # 20 software-simulated / CSV-imported medical device adapters
+│   ├── knowledge_base.py           # 28 offline NASA/CSA research references & lexical retriever
+│   ├── local_ai_rag.py             # Dense+lexical hybrid scorer & non-prescribing safety gate
+│   ├── main.py                     # FastAPI entrypoint & /api/* endpoints
+│   ├── marscare_routes.py          # Extended assessment, history, comm & RAG routes
+│   ├── support_modules.py          # Food/water inventory, comm queue & private journal persistence
+│   └── tests/test_tarscare_safety.py
+├── frontend/                       # Web Habitat Workstation (React 18 + TypeScript + Vite + Tailwind)
+│   ├── .env.example                # Clean Firebase AI Logic & App Check env template (no secrets)
 │   ├── src/
-│   │   ├── components/         # Feature views, modals, AI switcher, charts & voice helpers
-│   │   ├── App.tsx             # Navigation shell (11 views across 3 groups) & emergency modal
-│   │   ├── index.css           # Tailwind & Host Grotesk global styling
-│   │   └── types.ts            # TypeScript contracts matching backend payloads
-│   ├── package.json
-│   ├── tailwind.config.js
-│   └── vite.config.ts          # Dev proxy (/api -> http://127.0.0.1:8000)
-├── start_tarscare.ps1          # One-command Windows PowerShell launcher
-├── vercel.json                 # Vercel Services configuration (Vite frontend + FastAPI backend)
-└── .vercelignore               # Deployment exclusions (.env, local DB, caches, tests)
+│   │   ├── lib/firebaseHybridAI.ts # Firebase AI Logic Hybrid Router, App Check, Auth, Firestore, Remote Config
+│   │   ├── components/             # 11 Spacecraft views + AIProviderSwitcher Hybrid Mission Console
+│   │   └── App.tsx
+│   └── package.json
+├── firebase.json                   # Firebase Hosting & Cloud Firestore configuration
+├── firestore.rules                 # Crew-authenticated rules blocking private journal cloud writes
+├── vercel.json                     # Single-origin Vercel Services deployment (Frontend + FastAPI)
+└── LICENSE                         # Apache License 2.0
 ```
 
 ---
 
-## Getting Started
+## Getting Started & Judge Testing Instructions
 
-### Prerequisites
+> **Hardware Requirement Notice:** All 20 medical instruments in TARS Care are **100% software-simulated or CSV/JSON-imported** on standard consumer desktop/laptop Chrome browsers and standard Android phones/emulators. **No proprietary or specialized hardware is required.**
 
-- **Python 3.10+** (tested with Python 3.12)
-- **Node.js 18+** and **npm**
-- *(Optional)* **Groq API Key** (`GROQ_API_KEY`) for cloud LLM synthesis or **[Ollama](https://ollama.com)** locally (`127.0.0.1:11434`, e.g., `qwen2.5:3b` or `llama3.2:3b`) for local LLM synthesis. TARS Care operates fully offline without either using its deterministic RAG engine.
+### 1. Firebase Project & App Check Setup (Shared Across Web & Android)
 
-### Environment Variables
+1. In the [Firebase Console](https://console.firebase.google.com/), create or select a Firebase project:
+   - Open **AI Logic** → click **Get started** and enable the **Gemini Developer API** (`GoogleAIBackend`).
+   - Open **App Check** → register your Web app (reCAPTCHA v3/Enterprise) and Android app; for local or judge testing, register a debug token (**debug tokens are accepted per `#BuildHybridAI` rules**).
+   - *(Recommended)* Enable **Authentication → Anonymous** (and Google), **Cloud Firestore**, and **Remote Config** (`co2_warn_mmhg = 3.0`, `rad_warn_msv = 50`, `cloud_fallback_model = "gemini-3.5-flash-lite"`).
+2. **Enable Chrome Built-in Gemini Nano 4 (Optional for Local On-Device Web Inference):**
+   - In Chrome Desktop (`138+`), enable `chrome://flags/#optimization-guide-on-device-model` (`Enabled BypassPerfRequirement`) and `chrome://flags/#prompt-api-for-gemini-nano-multimodal-input` (`Enabled`), relaunch Chrome, then click **`Warm Up Nano 4`** inside the TARS Care toolbar.
+   - *If Gemini Nano 4 is unavailable on the test machine, `InferenceMode.PREFER_ON_DEVICE` automatically falls back to Cloud Gemini via Firebase AI Logic!*
 
-All environment variables are optional. Create `backend/.env` for local development if you want custom API keys or models (do not commit `.env` files):
+### 2. Run the Web Application (`Web / Chrome`)
 
-```ini
-# Optional: NASA Open API key for higher DONKI/InSight rate limits (defaults to DEMO_KEY)
-NASA_API_KEY=your_nasa_api_key
-
-# Optional: Groq API key for cloud LLM synthesis in AI Health Assistant & Personal Companion
-GROQ_API_KEY=your_groq_api_key
-
-# Optional: Default Groq chat model override (default: qwen/qwen3.8-27b)
-TARSCARE_API_MODEL=qwen/qwen3.8-27b
-
-# Optional: Custom SQLite file path (defaults to backend/tarscare_local.db locally, /tmp on Vercel)
-TARSCARE_DB_PATH=
+```bash
+# 1. Start FastAPI scientific telemetry & RAG backend (http://127.0.0.1:8000)
+cd backend
+pip install -r requirements.txt
+python -m uvicorn main:app --host 127.0.0.1 --port 8000
 ```
 
-### Installation & Running Locally
+```bash
+# 2. Configure & start React + Vite frontend (http://127.0.0.1:5173)
+cd frontend
+cp .env.example .env.local   # Add your public Firebase Web config (or paste at runtime in the UI!)
+npm install
+npm run dev -- --host 127.0.0.1 --port 5173
+```
 
-1. **Clone the repository**
-   ```bash
-   git clone https://github.com/TanSuChin/NASASpaceChallenge2026-Milky_Has_Its_Own_Way.git
-   cd NASASpaceChallenge2026-Milky_Has_Its_Own_Way
+- **Zero-Friction Judge Testing:** Even without creating `.env.local`, open **http://localhost:5173** → click **`Firebase Config`** in the AI toolbar → paste your `firebaseConfig` snippet and check **Enable App Check Debug Token** (saved only in browser `localStorage`).
+
+### 3. Build & Run the Native Android EVA Companion (`Android`)
+
+1. Open the [android/](android/) directory in **Android Studio** (or build via Gradle CLI with JDK 17/21).
+2. *(Optional)* Copy your Firebase Android `google-services.json` to `android/app/google-services.json` (gitignored), **or** enter `projectId`, `applicationId`, and `apiKey` at runtime in **Tab 3 (`Sync & Config`)** inside the Android app.
+3. Build the debug APK:
+   ```powershell
+   cd android
+   .\gradlew.bat assembleDebug
    ```
-
-2. **Install backend and frontend dependencies**
-   ```bash
-   cd backend
-   pip install -r requirements.txt
-   cd ../frontend
-   npm install
-   cd ..
-   ```
-
-3. **Start the application**
-
-   - **Option A — Two terminals (cross-platform):**
-     ```bash
-     # Terminal 1: Start FastAPI backend (http://127.0.0.1:8000)
-     cd backend
-     python -m uvicorn main:app --host 127.0.0.1 --port 8000
-     ```
-     ```bash
-     # Terminal 2: Start Vite frontend (http://127.0.0.1:5173)
-     cd frontend
-     npm run dev -- --host 127.0.0.1 --port 5173
-     ```
-
-   - **Option B — Windows PowerShell one-command launcher:**
-     ```powershell
-     .\start_tarscare.ps1
-     ```
-
-   Open **http://localhost:5173** in your browser. Vite proxies all `/api/*` calls to `http://127.0.0.1:8000`.
+4. Install on an Android 14+ AICore-capable device (for local Gemini Nano 4) or any Android API 26+ emulator (automatically uses Cloud Gemini fallback or offline deterministic safety rules, and syncs live to the Web Console via Cloud Firestore `eva_logs`).
 
 ---
 
-## Usage & Application Views
+## Automated Verification & Safety Guardrails
 
-On first launch, `backend/database.py` automatically seeds 30 Sols (`Sol 155–184`) of synthetic Mars mission telemetry for the 4-person **Ares-Horizon IV** crew.
-
-### Navigation Views (11 Screens in 3 Groups)
-
-1. **Health & Monitoring**
-   - **Mission Overview:** 3-question wayfinding band, Interactive Human Body, EVA Readiness (`GO`/`CAUTION`/`HOLD`), Predictive Threshold Runways, vitals vs. personal baseline, and 7/14/30-Sol trend charts.
-   - **Health Assessment:** Device data capture, guided medical examinations, manual entry, CSV/JSON import, voice symptom capture, and behavioral check-ins.
-   - **Spaceflight Hazards:** Detailed modules for all 5 NASA human-spaceflight hazards with dual-series 14-Sol charts and configurable prototype alert limits.
-   - **Medical Devices:** 20-instrument NASA/CSA hardware catalog (Wearables, Imaging, Radiation, Integrated Health, Biosampling, Behavioral/Performance) separating `Simulated` and `Connected` states.
-   - **Health History:** Filterable longitudinal telemetry, device measurements, guided exams, lab assays, and Markdown report export.
-2. **Mission & Operations**
-   - **Food & Supplies:** Ration and potable water inventory, consumption/resupply logs, expiry alerts, and nutritional target tracking.
-   - **Distance from Earth:** Live `Connected` / `Delayed (Mars Nominal)` / `Offline (Blackout)` simulation toggle, store-and-forward queue, and NASA DONKI / InSight sync controls.
-   - **Crew & Med Ops:** Crew switcher, CMO triage matrix, onboard med-kit inventory, Privacy PIN management (`DEFAULT_DEMO_PIN = "2026"`), and Flight Surgeon consult packet builder.
-3. **AI & Personal**
-   - **AI Health Assistant:** Citation-backed NASA/CSA RAG Q&A, AI Provider Switcher (Local / Groq API / Deterministic Offline), and offline full-text document reader.
-   - **Personal Companion:** Supportive reflection and stress-management companion with safety and exercise-contraindication guardrails.
-   - **My Journal:** SHA-256 PIN-protected private behavioral reflections excluded from fleet triage and Earth-sync packets.
-
-### Key API Endpoints
-
-| Endpoint | Method | Purpose |
-| :--- | :--- | :--- |
-| `/api/health` | `GET` | Liveness and offline-readiness check |
-| `/api/state` | `GET` | Full hydrated crew, telemetry, assessment, device, food, comm & RAG state |
-| `/api/baseline` | `GET`, `POST` | Read or recalibrate personal crew baselines |
-| `/api/assessment/evaluate` | `POST` | Submit manual measurements & symptom checklists for integrated evaluation |
-| `/api/rag/query` | `POST` | Query the 28-doc NASA/CSA corpus with safety & citation verification |
-| `/api/emergency/escalate` | `POST` | Generate zero-latency emergency checklists and queue escalation packets |
-| `/api/reset` | `POST` | Reset the local SQLite database to the seeded 30-Sol demo state |
-
----
-
-## Deployment (Vercel)
-
-This repository includes [vercel.json](vercel.json) (configured with **Vercel Services**, in Beta on all plans) and [.vercelignore](.vercelignore) to deploy both the Vite frontend and FastAPI backend in one Vercel project:
-
-- **Routing:** `/api/(.*)` routes to the Python FastAPI service (`backend/main.py` -> `main:app`), while `/(.*)` routes to the Vite static frontend (`frontend/` with SPA `/index.html` fallback).
-- **Serverless SQLite Handling:** When `VERCEL` is set (or `backend/` is read-only), `backend/database.py` automatically places the SQLite database in `/tmp/tarscare_local.db`, and middleware in `backend/main.py` initializes and seeds it on cold start. *(Note: `/tmp` in Vercel Functions is ephemeral across cold starts and scaling instances; attach an external database for multi-user durable cloud persistence.)*
-- **Deploy via CLI:**
-  ```bash
-  npx vercel login
-  npx vercel --prod
-  ```
-- **Optional Vercel Environment Variables:** Add `GROQ_API_KEY`, `TARSCARE_API_MODEL`, and `NASA_API_KEY` as sensitive variables in **Project Settings → Environment Variables**. Without them, the deployment runs using `DEMO_KEY` and deterministic offline RAG.
-
----
-
-## Testing & Verification
-
-Run the automated backend safety, medical rule, RAG, hardware, DONKI, and offline integrity test suite (`26` tests in an isolated temp SQLite database):
+Run the automated backend medical safety, RAG citation, unit-integrity (`Gy` vs. `Sv`), and blackout integrity test suite:
 
 ```bash
 python -m pytest backend/tests/test_tarscare_safety.py -v
 ```
 
-Run frontend TypeScript validation and production build verification:
+Run Web TypeScript typechecking and production bundle verification:
 
 ```bash
 cd frontend
@@ -266,28 +181,14 @@ npx tsc --noEmit
 npm run build
 ```
 
----
-
-## Scientific Accuracy & Safety Guardrails
-
-- **Prototype Boundary:** TARS Care is a software decision-support prototype — **not** clinically certified or flight-qualified medical software. It tracks trends without diagnosing psychiatric disorders or infections and refuses medication dosing or invasive/surgical instructions.
-- **Strict Priority & Exercise Safety Gate:** Recommendations sort strictly `IMMEDIATE > HIGH > ROUTINE`. During `CRITICAL` vitals, hypoxemia (`SpO₂ < 94%`), presyncope, or cardiopulmonary red flags, routine exercise prescriptions are suppressed and replaced with explicit **Exercise Hold** guidance.
-- **Radiation Unit Integrity:** Physical **absorbed dose (`Gy` / `mGy`)** and biologically weighted **equivalent/effective dose (`Sv` / `mSv`)** are strictly separated; user-configurable alert limits are explicitly labeled as non-NASA prototype defaults.
-- **Explicit Data Provenance:** All records and documents distinguish `Simulated Data`, `User-Entered Data`, `Real Research Data`, and `System Operational Spec` (and clarify Earth-analog context such as ARMAS high-altitude aircraft datasets).
-
----
-
-## Contributing
-
-Contributions are welcome during and after the hackathon:
-
-1. Fork the repository and create a feature branch (`git checkout -b feat/your-feature`).
-2. Keep medical safety guardrails, unit separation (`Gy` vs. `Sv`), and data provenance tags intact.
-3. Run both `python -m pytest backend/tests/test_tarscare_safety.py -v` and `cd frontend && npx tsc --noEmit && npm run build` before opening a Pull Request.
+### Core Safety & Compliance Commitments
+- **Non-Diagnostic & Non-Prescribing Prototype:** TARS Care is a software decision-support prototype — not clinically certified medical software. Post-generation regex gates strip any medication dosages on both Web and Android, and critical vitals (`SpO₂ < 94%`, `HR ≥ 115 BPM`, cardiopulmonary red flags) automatically suppress routine exercise in favor of **Exercise Hold**.
+- **Strict Radiation Unit Separation:** Absorbed physical dose (`Gy` / `mGy`) and biologically weighted equivalent/effective dose (`Sv` / `mSv`) are never conflated.
+- **Public Data Attribution & Non-Endorsement:** References publicly available NASA (HRP, OSDR, RadLab, NLSP, EDA, DONKI, InSight) and Canadian Space Agency (TBone, Vascular, CCISS, CARDIOBREATH) research. NASA and CSA do not endorse this independent hackathon project.
 
 ---
 
 ## Team & License
 
-- **Team:** Team Milky Has Its Own Way — NASA Space Apps Challenge 2026
-- **License:** No open-source license file is currently included in this repository; contact the repository owners before redistributing.
+- **Team:** Team Milky Has Its Own Way (`CHAI` & `TanSuChin`)
+- **License:** Distributed under the **Apache License, Version 2.0**. See [LICENSE](LICENSE) for full terms.

@@ -1,7 +1,30 @@
-import React, { useState } from 'react';
-import { Cloud, Cpu, KeyRound, RefreshCw } from 'lucide-react';
+import React, { useEffect, useState } from 'react';
+import {
+  CheckCircle2,
+  Cloud,
+  Cpu,
+  KeyRound,
+  Lock,
+  RefreshCw,
+  ShieldCheck,
+  Sparkles,
+} from 'lucide-react';
 import { FullSystemState, LocalAIStatus } from '../types';
-import { updateLocalAIConfig, warmupLocalAI } from './uiHelpers';
+import {
+  clearRuntimeFirebaseConfig,
+  ensureHybridSuiteInitialized,
+  HYBRID_CLOUD_MODELS,
+  HybridModeChoice,
+  HybridSuiteSnapshot,
+  parseFirebaseConfigSnippet,
+  saveRuntimeFirebaseConfig,
+  setSelectedCloudModel,
+  setSelectedHybridMode,
+  signInCrewWithGoogle,
+  signOutCrew,
+  subscribeHybridSuite,
+  warmupOnDeviceGeminiNano,
+} from '../lib/firebaseHybridAI';
 
 interface AIProviderSwitcherProps {
   aiStatus?: LocalAIStatus;
@@ -11,182 +34,126 @@ interface AIProviderSwitcherProps {
   onNotice?: (msg: string | null) => void;
 }
 
-/**
- * Unified switcher between Local LLM (Ollama / offline RAG) and External API LLM (Groq Cloud).
- * Keeps sidebar footprint compact while providing full model selection and API testing in AI views.
- */
+const MODE_META: {
+  id: HybridModeChoice;
+  shortLabel: string;
+  fullLabel: string;
+  desc: string;
+}[] = [
+  {
+    id: 'prefer_on_device',
+    shortLabel: 'Prefer On-Device',
+    fullLabel: 'PREFER_ON_DEVICE (Gemini Nano 4 → Cloud Fallback)',
+    desc: 'Runs free & private on Chrome Gemini Nano 4 first; seamlessly falls back to Cloud Gemini when unavailable.',
+  },
+  {
+    id: 'only_on_device',
+    shortLabel: 'Only On-Device',
+    fullLabel: 'ONLY_ON_DEVICE (Strict Local · Zero Egress)',
+    desc: 'Forces local Gemini Nano 4 execution only — guaranteed zero cloud transmission for blackout & private journals.',
+  },
+  {
+    id: 'prefer_in_cloud',
+    shortLabel: 'Prefer Cloud',
+    fullLabel: 'PREFER_IN_CLOUD (Cloud Gemini → Local Fallback)',
+    desc: 'Prioritizes Cloud Gemini for deep synthesis; falls back to on-device Gemini Nano 4 if link drops.',
+  },
+  {
+    id: 'only_in_cloud',
+    shortLabel: 'Only Cloud',
+    fullLabel: 'ONLY_IN_CLOUD (Cloud Gemini Direct)',
+    desc: 'Routes directly to Cloud Gemini via Firebase AI Logic + App Check.',
+  },
+];
+
 export const AIProviderSwitcher: React.FC<AIProviderSwitcherProps> = ({
-  aiStatus,
   variant = 'toolbar',
   collapsed = false,
-  onStateUpdated,
   onNotice,
 }) => {
+  const [snap, setSnap] = useState<HybridSuiteSnapshot | null>(null);
   const [busy, setBusy] = useState(false);
-  const [showKeyForm, setShowKeyForm] = useState(false);
-  const [keyInput, setKeyInput] = useState('');
+  const [showConfigModal, setShowConfigModal] = useState(false);
+  const [rawSnippet, setRawSnippet] = useState('');
+  const [recaptchaKey, setRecaptchaKey] = useState('');
+  const [debugTokenEnabled, setDebugTokenEnabled] = useState(true);
 
-  const provider: 'local' | 'api' = aiStatus?.llm_provider === 'api' ? 'api' : 'local';
-  const llmEnabled = aiStatus?.llm_enabled ?? true;
-  const localModels =
-    aiStatus?.installed_chat_models && aiStatus.installed_chat_models.length > 0
-      ? aiStatus.installed_chat_models
-      : aiStatus?.ollama_model
-        ? [aiStatus.ollama_model]
-        : [];
-  const apiCatalog = aiStatus?.api_model_catalog || [];
-  const apiModels =
-    apiCatalog.length > 0
-      ? apiCatalog.map((m) => ({ id: m.id, label: m.label }))
-      : (aiStatus?.available_api_models || ['qwen/qwen3.8-27b']).map((id) => ({
-          id,
-          label: id === 'qwen/qwen3.8-27b' ? `${id} (Recommended)` : id,
-        }));
+  useEffect(() => {
+    const unsub = subscribeHybridSuite(setSnap);
+    void ensureHybridSuiteInitialized();
+    return unsub;
+  }, []);
 
-  const activeModel =
-    provider === 'api'
-      ? aiStatus?.api_model || apiModels[0]?.id || 'qwen/qwen3.8-27b'
-      : aiStatus?.ollama_model || localModels[0] || '';
-
-  const emitNotice = (msg: string | null) => {
-    if (onNotice) onNotice(msg);
+  const emit = (msg: string | null) => {
+    onNotice?.(msg);
   };
 
-  const handleSwitchProvider = async (nextProvider: 'local' | 'api') => {
-    if (busy) return;
-    setBusy(true);
-    emitNotice(null);
-    try {
-      const next = await updateLocalAIConfig(
-        { llm_provider: nextProvider, llm_enabled: true },
-        onStateUpdated,
-      );
-      if (nextProvider === 'api') {
-        if (next.api_blocked_blackout) {
-          emitNotice(
-            'Switched preference to API LLM (Groq), currently paused because Link Status is OFFLINE Blackout.',
-          );
-        } else if (!next.api_key_configured) {
-          emitNotice('Switched to API LLM, but no GROQ_API_KEY is configured yet.');
-        } else {
-          emitNotice(`Switched to Groq API LLM (${next.api_model || 'qwen/qwen3.8-27b'}).`);
-        }
-      } else {
-        emitNotice(
-          next.ollama_available
-            ? `Switched to Local LLM (Ollama · ${next.ollama_model}).`
-            : 'Switched to Local LLM mode (Ollama offline — using deterministic offline RAG fallback).',
-        );
-      }
-    } catch (err) {
-      emitNotice(err instanceof Error ? err.message : 'Unable to switch LLM provider.');
-    } finally {
-      setBusy(false);
-    }
-  };
+  const activeMode: HybridModeChoice = snap?.selectedMode || 'prefer_on_device';
+  const isOnDevicePrimary =
+    activeMode === 'prefer_on_device' || activeMode === 'only_on_device';
 
-  const handleModelChange = async (modelName: string) => {
-    setBusy(true);
-    emitNotice(null);
-    try {
-      if (provider === 'api') {
-        await updateLocalAIConfig({ selected_api_model: modelName }, onStateUpdated);
-        emitNotice(`Active Groq API model switched to ${modelName}.`);
-      } else {
-        await updateLocalAIConfig({ selected_model: modelName }, onStateUpdated);
-        emitNotice(`Active local Ollama model switched to ${modelName}.`);
-      }
-    } catch (err) {
-      emitNotice(err instanceof Error ? err.message : 'Unable to switch model.');
-    } finally {
-      setBusy(false);
+  const nanoBadge = (() => {
+    const st = snap?.chromeNanoStatus || 'checking';
+    if (st === 'available') return 'Nano 4 Ready';
+    if (st === 'downloading') {
+      return `Nano 4 Downloading ${snap?.nanoDownloadProgress ?? 0}%`;
     }
-  };
-
-  const handleToggleLLM = async () => {
-    setBusy(true);
-    emitNotice(null);
-    try {
-      const nextEnabled = !llmEnabled;
-      await updateLocalAIConfig({ llm_enabled: nextEnabled }, onStateUpdated);
-      emitNotice(
-        nextEnabled
-          ? `${provider === 'api' ? 'Groq API' : 'Local Ollama'} synthesis enabled alongside grounded NASA/CSA RAG.`
-          : 'Deterministic offline RAG mode active (generative LLM paused).',
-      );
-    } catch (err) {
-      emitNotice(err instanceof Error ? err.message : 'Unable to update AI synthesis mode.');
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const handleWarmup = async () => {
-    setBusy(true);
-    emitNotice(null);
-    try {
-      const res = await warmupLocalAI(activeModel || null, onStateUpdated, provider);
-      emitNotice(res.message);
-    } catch (err) {
-      emitNotice(err instanceof Error ? err.message : 'Engine verification failed.');
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const handleSaveKey = async (e: React.FormEvent) => {
-    e.preventDefault();
-    const cleaned = keyInput.trim();
-    if (!cleaned) return;
-    setBusy(true);
-    emitNotice(null);
-    try {
-      const next = await updateLocalAIConfig(
-        { groq_api_key: cleaned, llm_provider: 'api', llm_enabled: true },
-        onStateUpdated,
-      );
-      setKeyInput('');
-      setShowKeyForm(false);
-      emitNotice(`Groq API key saved (${next.api_key_status}). Active model: ${next.api_model}.`);
-    } catch (err) {
-      emitNotice(err instanceof Error ? err.message : 'Unable to save Groq API key.');
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const statusLabel = (() => {
-    if (!llmEnabled) {
-      return aiStatus?.sentence_transformers_cached
-        ? 'Offline Semantic RAG'
-        : 'Deterministic Offline RAG';
-    }
-    if (provider === 'api') {
-      if (aiStatus?.api_blocked_blackout) return 'API Paused (Blackout) · Offline RAG';
-      if (aiStatus?.api_available) return `Groq API (${aiStatus?.api_model || 'qwen/qwen3.8-27b'})`;
-      return 'API Key Missing · Offline RAG';
-    }
-    if (aiStatus?.ollama_available) {
-      return `Local Ollama (${aiStatus?.ollama_model})`;
-    }
-    return aiStatus?.sentence_transformers_cached
-      ? 'Offline Semantic RAG'
-      : 'Deterministic Offline RAG';
+    if (st === 'downloadable') return 'Nano 4 Downloadable';
+    if (st === 'checking') return 'Checking Nano 4...';
+    return snap?.firebaseConfigured ? 'Nano N/A → Cloud Fallback' : 'Nano N/A · Offline Safety';
   })();
+
+  const handleModeSelect = (nextMode: HybridModeChoice) => {
+    setSelectedHybridMode(nextMode);
+    const meta = MODE_META.find((m) => m.id === nextMode);
+    emit(`Firebase AI Logic routing set to ${meta?.fullLabel || nextMode}.`);
+  };
+
+  const handleWarmupNano = async () => {
+    setBusy(true);
+    emit(null);
+    try {
+      const res = await warmupOnDeviceGeminiNano();
+      emit(res.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleSaveFirebaseConfig = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setBusy(true);
+    emit(null);
+    try {
+      const parsed = parseFirebaseConfigSnippet(rawSnippet, {
+        recaptchaSiteKey: recaptchaKey,
+        appCheckDebug: debugTokenEnabled,
+      });
+      await saveRuntimeFirebaseConfig(parsed);
+      setRawSnippet('');
+      setShowConfigModal(false);
+      emit(
+        `Connected Firebase project "${parsed.projectId}" with App Check, AI Logic Hybrid SDK, Firestore Offline Cache & Remote Config.`,
+      );
+    } catch (err) {
+      emit(err instanceof Error ? err.message : 'Invalid Firebase config snippet.');
+    } finally {
+      setBusy(false);
+    }
+  };
 
   if (variant === 'sidebar') {
     if (collapsed) {
-      const nextMode = provider === 'api' ? 'local' : 'api';
+      const next: HybridModeChoice = isOnDevicePrimary ? 'prefer_in_cloud' : 'prefer_on_device';
       return (
         <button
           type="button"
-          disabled={busy}
-          onClick={() => handleSwitchProvider(nextMode)}
-          title={`AI Mode: ${provider === 'api' ? 'API LLM (Groq)' : 'Local LLM'} — click to switch`}
-          aria-label={`Switch AI mode (currently ${provider === 'api' ? 'API LLM' : 'Local LLM'})`}
-          className="w-full flex items-center justify-center p-2 rounded-xl bg-[#0B0D1A] border border-white/[0.1] text-[#A5D8FF] hover:border-[#A5D8FF]/45 transition-colors disabled:opacity-60"
+          onClick={() => handleModeSelect(next)}
+          title={`Firebase Hybrid AI: ${activeMode} (${nanoBadge}) — click to toggle`}
+          aria-label="Toggle Firebase Hybrid AI inference mode"
+          className="w-full flex items-center justify-center p-2 rounded-xl bg-[#0B0D1A] border border-white/[0.1] text-[#A5D8FF] hover:border-[#A5D8FF]/45 transition-colors"
         >
-          {provider === 'api' ? <Cloud className="w-4 h-4" /> : <Cpu className="w-4 h-4" />}
+          {isOnDevicePrimary ? <Cpu className="w-4 h-4" /> : <Cloud className="w-4 h-4" />}
         </button>
       );
     }
@@ -195,201 +162,255 @@ export const AIProviderSwitcher: React.FC<AIProviderSwitcherProps> = ({
       <div className="space-y-1.5">
         <div
           role="group"
-          aria-label="Switch between Local LLM and API LLM"
+          aria-label="Firebase AI Logic Hybrid Inference Mode"
           className="grid grid-cols-2 rounded-full bg-[#0B0D1A] border border-white/[0.1] p-0.5"
         >
           <button
             type="button"
-            disabled={busy}
-            aria-pressed={provider === 'local'}
-            onClick={() => handleSwitchProvider('local')}
+            aria-pressed={isOnDevicePrimary}
+            onClick={() => handleModeSelect('prefer_on_device')}
             className={`px-2 py-1 rounded-full text-[11px] font-medium inline-flex items-center justify-center gap-1 transition-colors ${
-              provider === 'local'
+              isOnDevicePrimary
                 ? 'bg-[#EEF0F6] text-[#040404] font-semibold'
                 : 'text-[#E5E5E4]/75 hover:text-[#FAF9FA]'
             }`}
           >
             <Cpu className="w-3 h-3 shrink-0" />
-            <span>Local LLM</span>
+            <span>On-Device</span>
           </button>
           <button
             type="button"
-            disabled={busy}
-            aria-pressed={provider === 'api'}
-            onClick={() => handleSwitchProvider('api')}
+            aria-pressed={!isOnDevicePrimary}
+            onClick={() => handleModeSelect('prefer_in_cloud')}
             className={`px-2 py-1 rounded-full text-[11px] font-medium inline-flex items-center justify-center gap-1 transition-colors ${
-              provider === 'api'
+              !isOnDevicePrimary
                 ? 'bg-[#EEF0F6] text-[#040404] font-semibold'
                 : 'text-[#E5E5E4]/75 hover:text-[#FAF9FA]'
             }`}
           >
             <Cloud className="w-3 h-3 shrink-0" />
-            <span>API LLM</span>
+            <span>Cloud AI</span>
           </button>
         </div>
-        <div className="text-[11px] text-[#E5E5E4]/65 truncate text-center" title={statusLabel}>
-          {statusLabel}
+        <div
+          className="text-[11px] text-[#A5D8FF]/90 truncate text-center flex items-center justify-center gap-1"
+          title={`Firebase AI Logic · ${activeMode} · ${nanoBadge}`}
+        >
+          <Sparkles className="w-3 h-3 shrink-0" />
+          <span className="truncate">{nanoBadge}</span>
         </div>
       </div>
     );
   }
 
   return (
-    <div className="flex flex-wrap items-center gap-2">
-      {/* Segmented Local LLM <-> API LLM Switch */}
-      <div
-        role="group"
-        aria-label="Select AI LLM provider"
-        className="inline-flex items-center rounded-full bg-[#0B0D1A] border border-white/15 p-0.5"
-      >
-        <button
-          type="button"
-          disabled={busy}
-          aria-pressed={provider === 'local'}
-          onClick={() => handleSwitchProvider('local')}
-          className={`px-3 py-1 rounded-full text-xs font-medium inline-flex items-center gap-1.5 transition-colors ${
-            provider === 'local'
-              ? 'bg-[#EEF0F6] text-[#040404] font-semibold'
-              : 'text-[#E5E5E4]/80 hover:text-[#FAF9FA]'
-          }`}
-        >
-          <Cpu className="w-3.5 h-3.5" />
-          <span>Local LLM</span>
-        </button>
-        <button
-          type="button"
-          disabled={busy}
-          aria-pressed={provider === 'api'}
-          onClick={() => handleSwitchProvider('api')}
-          className={`px-3 py-1 rounded-full text-xs font-medium inline-flex items-center gap-1.5 transition-colors ${
-            provider === 'api'
-              ? 'bg-[#EEF0F6] text-[#040404] font-semibold'
-              : 'text-[#E5E5E4]/80 hover:text-[#FAF9FA]'
-          }`}
-        >
-          <Cloud className="w-3.5 h-3.5" />
-          <span>API LLM</span>
-        </button>
-      </div>
-
-      {/* Provider-specific Model Picker */}
-      {provider === 'api' && apiModels.length > 0 && (
+    <div className="space-y-2.5">
+      <div className="flex flex-wrap items-center gap-2">
+        {/* 4-Mode Firebase AI Logic InferenceMode Selector */}
         <select
-          id={`api-model-select-${variant}`}
-          name="groq_chat_model"
-          value={activeModel}
-          onChange={(e) => handleModelChange(e.target.value)}
-          disabled={busy}
-          aria-label="Select Groq API LLM model"
-          className="rounded-full bg-[#0B0D1A] border border-white/15 px-3 py-1.5 text-xs text-[#FAF9FA] focus:border-[#A5D8FF] focus:outline-none max-w-[260px]"
+          id={`firebase-hybrid-mode-${variant}`}
+          name="firebase_hybrid_mode"
+          value={activeMode}
+          onChange={(e) => handleModeSelect(e.target.value as HybridModeChoice)}
+          aria-label="Select Firebase AI Logic InferenceMode"
+          className="rounded-full bg-[#0B0D1A] border border-[#A5D8FF]/40 px-3.5 py-1.5 text-xs font-semibold text-[#FAF9FA] focus:border-[#A5D8FF] focus:outline-none"
         >
-          {apiModels.map((m) => (
+          {MODE_META.map((m) => (
             <option key={m.id} value={m.id}>
-              {m.label}
+              {m.fullLabel}
             </option>
           ))}
         </select>
-      )}
 
-      {provider === 'local' && localModels.length > 0 && (
-        <select
-          id={`local-model-select-${variant}`}
-          name="ollama_chat_model"
-          value={activeModel}
-          onChange={(e) => handleModelChange(e.target.value)}
-          disabled={busy}
-          aria-label="Select local Ollama model"
-          className="rounded-full bg-[#0B0D1A] border border-white/15 px-3 py-1.5 text-xs text-[#FAF9FA] focus:border-[#A5D8FF] focus:outline-none max-w-[220px]"
-        >
-          {localModels.map((m) => (
-            <option key={m} value={m}>
-              {m}
-            </option>
-          ))}
-        </select>
-      )}
+        {/* Cloud Fallback Model Selector */}
+        {activeMode !== 'only_on_device' && (
+          <select
+            id={`firebase-cloud-model-${variant}`}
+            name="firebase_cloud_model"
+            value={snap?.cloudModel || 'gemini-3.5-flash-lite'}
+            onChange={(e) => {
+              setSelectedCloudModel(e.target.value);
+              emit(`Firebase Cloud fallback model set to ${e.target.value}.`);
+            }}
+            aria-label="Select Firebase Cloud Gemini fallback model"
+            className="rounded-full bg-[#0B0D1A] border border-white/15 px-3 py-1.5 text-xs text-[#E5E5E4] focus:border-[#A5D8FF] focus:outline-none max-w-[235px]"
+          >
+            {HYBRID_CLOUD_MODELS.map((m) => (
+              <option key={m.id} value={m.id}>
+                {m.label}
+              </option>
+            ))}
+          </select>
+        )}
 
-      {/* Enable / Pause Synthesis */}
-      <button
-        type="button"
-        disabled={busy}
-        onClick={handleToggleLLM}
-        className={`px-3 py-1.5 rounded-full text-xs font-medium border transition-colors ${
-          llmEnabled && aiStatus?.llm_active
-            ? 'bg-[#A5D8FF]/15 border-[#A5D8FF]/45 text-[#A5D8FF]'
-            : 'bg-[#0B0D1A] border-white/15 text-[#E5E5E4]/85 hover:border-[#A5D8FF]/40'
-        }`}
-      >
-        {llmEnabled ? 'LLM: On' : 'LLM: Paused'}
-      </button>
-
-      {/* Warm Up / Test Button */}
-      {(provider === 'api' ? aiStatus?.api_available : aiStatus?.ollama_available) && (
+        {/* Warm Up Chrome Gemini Nano 4 Button */}
         <button
           type="button"
           disabled={busy}
-          onClick={handleWarmup}
-          className="px-3 py-1.5 rounded-full bg-[#0B0D1A] border border-white/15 text-xs text-[#E5E5E4] hover:border-[#A5D8FF]/45 inline-flex items-center gap-1.5"
+          onClick={handleWarmupNano}
+          className="px-3 py-1.5 rounded-full bg-[#0B0D1A] border border-white/15 text-xs text-[#E5E5E4] hover:border-[#A5D8FF]/50 inline-flex items-center gap-1.5 transition-colors"
+          title="Initialize or download Chrome built-in Gemini Nano 4 via Firebase AI Logic"
         >
-          <RefreshCw className={`w-3 h-3 ${busy ? 'animate-spin' : ''}`} />
-          <span>{provider === 'api' ? 'Test API' : 'Warm Up'}</span>
+          <RefreshCw className={`w-3 h-3 text-[#A5D8FF] ${busy ? 'animate-spin' : ''}`} />
+          <span>{nanoBadge}</span>
         </button>
-      )}
 
-      {/* Live Status Pill */}
-      <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-[#0B0D1A] border border-[#A5D8FF]/30 text-xs text-[#A5D8FF]">
-        {provider === 'api' ? <Cloud className="w-3.5 h-3.5" /> : <Cpu className="w-3.5 h-3.5" />}
-        <span>{statusLabel}</span>
+        {/* App Check + Project Config Trigger */}
+        <button
+          type="button"
+          onClick={() => setShowConfigModal((v) => !v)}
+          className={`px-3 py-1.5 rounded-full text-xs font-medium inline-flex items-center gap-1.5 border transition-colors ${
+            snap?.firebaseConfigured
+              ? 'bg-emerald-500/15 border-emerald-500/35 text-emerald-200'
+              : 'bg-[#0B0D1A] border-amber-400/35 text-amber-200 hover:border-amber-300'
+          }`}
+          title="Configure Firebase Project, App Check & Crew Auth"
+        >
+          {snap?.firebaseConfigured ? (
+            <ShieldCheck className="w-3.5 h-3.5 text-emerald-300" />
+          ) : (
+            <KeyRound className="w-3.5 h-3.5 text-amber-300" />
+          )}
+          <span>
+            {snap?.firebaseConfigured
+              ? `Firebase · ${snap.projectId}`
+              : 'Firebase Config (Local Nano Sandbox)'}
+          </span>
+        </button>
+
+        {/* Last Runtime Execution Source Pill */}
+        {snap?.lastExecution && (
+          <div
+            className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-[#121522] border border-[#A5D8FF]/30 text-[11px] text-[#A5D8FF]"
+            title={`Privacy: ${snap.lastExecution.privacyGuarantee}`}
+          >
+            {snap.lastExecution.sourceActual === 'on_device' ? (
+              <Lock className="w-3 h-3 text-emerald-300" />
+            ) : (
+              <Cloud className="w-3 h-3 text-[#A5D8FF]" />
+            )}
+            <span>
+              Last: {snap.lastExecution.modelLabel} · {snap.lastExecution.latencyMs} ms
+            </span>
+          </div>
+        )}
       </div>
 
-      {/* Optional Key Config Button in Panel Mode */}
-      {variant === 'panel' && (
-        <button
-          type="button"
-          onClick={() => setShowKeyForm((prev) => !prev)}
-          className="px-3 py-1.5 rounded-full bg-[#0B0D1A] border border-white/15 text-xs text-[#E5E5E4]/85 hover:border-[#A5D8FF]/45 inline-flex items-center gap-1.5"
-        >
-          <KeyRound className="w-3 h-3 text-[#A5D8FF]" />
-          <span>{showKeyForm ? 'Hide Key' : 'Groq Key'}</span>
-        </button>
-      )}
+      {/* Runtime Firebase Project, App Check & Auth Configuration Panel */}
+      {showConfigModal && (
+        <div className="rounded-2xl bg-[#0B0D1A] border border-[#A5D8FF]/35 p-4 space-y-3 text-xs">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <div className="font-semibold text-[#FAF9FA] flex items-center gap-1.5">
+                <ShieldCheck className="w-4 h-4 text-[#A5D8FF]" />
+                <span>Firebase AI Logic · App Check · Auth · Firestore Setup</span>
+              </div>
+              <p className="text-[#E5E5E4]/75 mt-0.5">
+                Set <code className="text-[#A5D8FF]">VITE_FIREBASE_*</code> in{' '}
+                <code className="text-[#A5D8FF]">frontend/.env.local</code> or paste your public Web{' '}
+                <code className="text-[#A5D8FF]">firebaseConfig</code> object below (stored in browser{' '}
+                <code>localStorage</code> only — never committed to git).
+              </p>
+            </div>
+            {snap?.firebaseConfigured && (
+              <div className="flex items-center gap-2">
+                {snap.authIsAnonymous ? (
+                  <button
+                    type="button"
+                    onClick={() =>
+                      signInCrewWithGoogle().catch((e) =>
+                        emit(e instanceof Error ? e.message : 'Google Sign-In failed.'),
+                      )
+                    }
+                    className="mc-btn-secondary px-3 py-1.5 text-xs"
+                  >
+                    Sign In Crew (Google)
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => void signOutCrew()}
+                    className="mc-btn-secondary px-3 py-1.5 text-xs"
+                  >
+                    Sign Out ({snap.authDisplayName})
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={() => {
+                    clearRuntimeFirebaseConfig();
+                    emit('Cleared browser Firebase config override.');
+                  }}
+                  className="px-3 py-1.5 rounded-full border border-white/15 text-[#E5E5E4]/80 hover:text-[#FAF9FA]"
+                >
+                  Reset Override
+                </button>
+              </div>
+            )}
+          </div>
 
-      {variant === 'panel' && showKeyForm && (
-        <form onSubmit={handleSaveKey} className="w-full flex flex-wrap items-center gap-2 pt-2">
-          <input
-            type="password"
-            value={keyInput}
-            onChange={(e) => setKeyInput(e.target.value)}
-            placeholder="Paste GROQ_API_KEY (stored locally on backend only)..."
-            aria-label="Groq API key"
-            className="flex-1 min-w-[220px] rounded-full bg-[#0B0D1A] border border-white/15 px-3.5 py-1.5 text-xs text-[#FAF9FA] placeholder:text-[#E5E5E4]/45 focus:border-[#A5D8FF] focus:outline-none"
-          />
-          <button
-            type="submit"
-            disabled={busy || keyInput.trim().length < 10}
-            className="mc-btn-primary px-4 py-1.5 text-xs"
-          >
-            Save Groq Key
-          </button>
-          {aiStatus?.api_key_source === 'LOCAL_CONFIG' && (
-            <button
-              type="button"
-              disabled={busy}
-              onClick={async () => {
-                setBusy(true);
-                try {
-                  const next = await updateLocalAIConfig({ clear_groq_api_key: true }, onStateUpdated);
-                  emitNotice(`Cleared custom key override (source: ${next.api_key_source}).`);
-                } finally {
-                  setBusy(false);
-                }
-              }}
-              className="mc-btn-secondary px-3 py-1.5 text-xs"
-            >
-              Reset Override
-            </button>
-          )}
-        </form>
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-[11px]">
+            <div className="rounded-xl bg-[#121522] p-2.5 border border-white/[0.06]">
+              <span className="text-[#8E95A8] block">App Check Attestation</span>
+              <strong className="text-[#FAF9FA]">
+                {snap?.appCheckMode === 'local_sandbox'
+                  ? 'Sandbox (Configure Project for Cloud)'
+                  : `${snap?.appCheckMode} ${snap?.appCheckVerified ? '· Token Verified' : ''}`}
+              </strong>
+            </div>
+            <div className="rounded-xl bg-[#121522] p-2.5 border border-white/[0.06]">
+              <span className="text-[#8E95A8] block">Firebase Crew Auth</span>
+              <strong className="text-[#FAF9FA]">
+                {snap?.authUserUid
+                  ? `${snap.authIsAnonymous ? 'Anonymous Crew' : snap.authDisplayName} (${snap.authUserUid.slice(0, 8)}…)`
+                  : 'Offline Local Crew'}
+              </strong>
+            </div>
+            <div className="rounded-xl bg-[#121522] p-2.5 border border-white/[0.06]">
+              <span className="text-[#8E95A8] block">Remote Config Policy</span>
+              <strong className="text-[#FAF9FA]">
+                CO₂ {snap?.remoteConfig.co2WarnMmhg} mmHg · Rad {snap?.remoteConfig.radWarnMsv} mSv (
+                {snap?.remoteConfig.source})
+              </strong>
+            </div>
+          </div>
+
+          <form onSubmit={handleSaveFirebaseConfig} className="space-y-2.5">
+            <textarea
+              rows={3}
+              value={rawSnippet}
+              onChange={(e) => setRawSnippet(e.target.value)}
+              placeholder='Paste const firebaseConfig = { apiKey: "...", authDomain: "...", projectId: "...", appId: "..." };'
+              aria-label="Firebase Web configuration snippet"
+              className="w-full rounded-xl bg-[#121522] border border-white/15 p-2.5 font-mono text-xs text-[#FAF9FA] focus:border-[#A5D8FF] focus:outline-none"
+            />
+            <div className="flex flex-wrap items-center gap-3">
+              <input
+                type="text"
+                value={recaptchaKey}
+                onChange={(e) => setRecaptchaKey(e.target.value)}
+                placeholder="Optional: reCAPTCHA v3 / Enterprise site key"
+                className="flex-1 min-w-[220px] rounded-full bg-[#121522] border border-white/15 px-3.5 py-1.5 text-xs text-[#FAF9FA]"
+              />
+              <label className="inline-flex items-center gap-1.5 text-[#E5E5E4] cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={debugTokenEnabled}
+                  onChange={(e) => setDebugTokenEnabled(e.target.checked)}
+                />
+                <span>Enable App Check Debug Token (Local / Judge Testing)</span>
+              </label>
+              <button
+                type="submit"
+                disabled={busy || !rawSnippet.trim()}
+                className="mc-btn-primary px-4 py-1.5 text-xs inline-flex items-center gap-1.5"
+              >
+                <CheckCircle2 className="w-3.5 h-3.5" />
+                <span>Connect Firebase</span>
+              </button>
+            </div>
+          </form>
+        </div>
       )}
     </div>
   );

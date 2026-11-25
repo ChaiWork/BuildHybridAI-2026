@@ -21,6 +21,7 @@ dist/
 *.tsbuildinfo
 
 # Local SQLite DB backups / runtime artifacts
+*.db
 *.db-journal
 *.db-wal
 *.db-shm
@@ -28,3 +29,17 @@ dist/
 .vercel/
 .vercel
 .env*
+!.env.example
+!frontend/.env.example
+
+# Android build artifacts & secrets (never commit live google-services.json)
+android/.gradle/
+android/build/
+android/app/build/
+android/local.properties
+android/.idea/
+android/app/google-services.json
+!android/app/google-services.json.example
+*.iml
+*.apk
+*.aab

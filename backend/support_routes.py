@@ -244,6 +244,8 @@ class CompanionChatInput(BaseModel):
     message: str
     conversation_uid: Optional[str] = None
     mode: str = "COMPANION_CHAT"
+    client_on_device_reply: Optional[str] = None
+    client_engine_used: Optional[str] = None
 
 
 class CompanionEscalationInput(BaseModel):

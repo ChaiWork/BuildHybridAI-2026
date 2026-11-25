@@ -829,8 +829,10 @@ def query_rag_knowledge_base(payload: RAGQueryInput) -> Dict[str, Any]:
                 for f in findings[:5]
             ],
             "history": [{"role": m.role, "content": m.content} for m in payload.history[-6:]],
-            "allow_llm": True,
+            "allow_llm": not payload.retrieval_only,
         }
+    elif payload.retrieval_only:
+        ctx = {"allow_llm": False}
     return rag_engine.answer_question(
         question=payload.question,
         hazard_filter=payload.hazard_filter,

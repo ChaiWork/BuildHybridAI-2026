@@ -20,7 +20,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 import database
-from local_ai_rag import _probe_ollama, call_groq_chat, get_ai_config, get_local_ai_status
+from local_ai_rag import _PRESCRIPTION_LEAK_RE, _probe_ollama, call_groq_chat, get_ai_config, get_local_ai_status
 from models import DataProvenance, RiskLevel
 
 FOOD_CATEGORIES = [
@@ -3189,20 +3189,26 @@ def send_companion_message(payload: Dict[str, Any], crew_id: Optional[str] = Non
     reply_text = fallback_reply
 
     if not safety_escalation:
-        ollama_res = _synthesize_companion_with_ollama(
-            user_message=user_text,
-            history_messages=prev_msgs,
-            astronaut_name=astronaut_name,
-            mission_day=sol,
-            comm_summary=comm_summary,
-            exercise_contraindicated=exercise_contraindicated,
-            approved_journals=approved_journals,
-            latest_mood=latest_mood,
-            privacy=privacy,
-        )
-        if ollama_res:
-            reply_text = ollama_res["reply"]
-            engine_used = ollama_res["engine_used"]
+        client_reply_raw = str(payload.get("client_on_device_reply") or "").strip()
+        client_engine_raw = str(payload.get("client_engine_used") or "").strip()
+        if client_reply_raw and not _PRESCRIPTION_LEAK_RE.search(client_reply_raw):
+            reply_text = client_reply_raw
+            engine_used = client_engine_raw or "FIREBASE_ONLY_ON_DEVICE · Gemini Nano 4"
+        else:
+            ollama_res = _synthesize_companion_with_ollama(
+                user_message=user_text,
+                history_messages=prev_msgs,
+                astronaut_name=astronaut_name,
+                mission_day=sol,
+                comm_summary=comm_summary,
+                exercise_contraindicated=exercise_contraindicated,
+                approved_journals=approved_journals,
+                latest_mood=latest_mood,
+                privacy=privacy,
+            )
+            if ollama_res:
+                reply_text = ollama_res["reply"]
+                engine_used = ollama_res["engine_used"]
 
     coping_list = _select_safe_coping_suggestions(
         user_text=user_text,

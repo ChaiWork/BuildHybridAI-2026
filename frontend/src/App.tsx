@@ -66,6 +66,7 @@ import { FoodSuppliesView } from './components/FoodSuppliesView';
 import { PersonalCompanionView } from './components/PersonalCompanionView';
 import { AIProviderSwitcher } from './components/AIProviderSwitcher';
 import { GuideSection, HealthGuideModal } from './components/HealthGuideModal';
+import { syncFirebaseWithCommMode } from './lib/firebaseHybridAI';
 
 type NavTab =
   | 'overview'
@@ -166,6 +167,13 @@ export default function App() {
   useEffect(() => {
     loadState();
   }, [loadState]);
+
+  useEffect(() => {
+    const mode = state?.assessment?.comm_mode?.mode;
+    if (mode) {
+      void syncFirebaseWithCommMode(mode);
+    }
+  }, [state?.assessment?.comm_mode?.mode]);
 
   useEffect(() => {
     if (!state) return;

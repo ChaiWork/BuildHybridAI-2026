@@ -35,6 +35,10 @@ import {
 } from './voiceHelpers';
 
 import { GuideSection } from './HealthGuideModal';
+import {
+  extractStructuredSymptomsAndVitals,
+  logCrossPlatformEvaEvent,
+} from '../lib/firebaseHybridAI';
 
 interface HealthAssessmentViewProps {
   state: FullSystemState;
@@ -196,6 +200,9 @@ export const HealthAssessmentView: React.FC<HealthAssessmentViewProps> = ({
   const [voiceCaptureActive, setVoiceCaptureActive] = useState(false);
   const [voiceCaptureMsg, setVoiceCaptureMsg] = useState<string | null>(null);
   const voiceCaptureStopRef = useRef<(() => void) | null>(null);
+  const [freeformLogText, setFreeformLogText] = useState('');
+  const [aiParsingBusy, setAiParsingBusy] = useState(false);
+  const [aiParsedBanner, setAiParsedBanner] = useState<string | null>(null);
 
   useEffect(() => {
     return () => {
@@ -485,6 +492,14 @@ export const HealthAssessmentView: React.FC<HealthAssessmentViewProps> = ({
       const freshState = await apiRequest<FullSystemState>('/api/state');
       onStateUpdated(freshState);
       setLastSubmittedSymptoms(res.selected_symptoms || activeSyms);
+      void logCrossPlatformEvaEvent({
+        crewId: freshState.astronaut.astronaut_id,
+        crewName: freshState.astronaut.name,
+        sol: freshState.latest_telemetry.mission_day,
+        urgency: res.assessment.overall_status,
+        summary: `HR ${Math.round(form.heart_rate_bpm)} BPM · SpO2 ${form.spo2_pct.toFixed(1)}% · CO2 ${form.co2_mmhg.toFixed(2)} mmHg · Symptoms: ${activeSyms.join(', ') || 'None'}`,
+        inferenceSource: 'hybrid_telemetry_sync',
+      });
       setFeedbackMsg(
         `Assessment completed for Sol ${freshState.latest_telemetry.mission_day} (${provenanceLabel(freshState.latest_telemetry.provenance)}) · Overall Status: ${res.assessment.overall_status}.`,
       );
@@ -1091,6 +1106,87 @@ export const HealthAssessmentView: React.FC<HealthAssessmentViewProps> = ({
                 {voiceCaptureMsg}
               </div>
             )}
+
+            {/* Firebase AI Logic Hybrid Structured JSON Intake (Schema.object) */}
+            <div className="rounded-xl bg-[#0B0D1A] border border-[#A5D8FF]/30 p-3.5 space-y-2.5">
+              <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
+                <span className="font-semibold text-[#A5D8FF] inline-flex items-center gap-1.5">
+                  <Sparkles className="w-3.5 h-3.5" />
+                  <span>Hybrid AI Structured Intake (firebase/ai JSON Schema)</span>
+                </span>
+                <div className="flex flex-wrap gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setFreeformLogText(
+                        'Returned from rover EVA; heart rate 108 bpm, BP 118/76, SpO2 95.2%, cabin CO2 3.6 mmHg, noticing mild headache and throat irritation.',
+                      )
+                    }
+                    className="px-2 py-0.5 rounded-full bg-[#121522] border border-white/10 text-[11px] text-[#E5E5E4] hover:border-[#A5D8FF]/50"
+                  >
+                    Sample EVA Log
+                  </button>
+                </div>
+              </div>
+              <div className="flex flex-col sm:flex-row gap-2">
+                <input
+                  type="text"
+                  value={freeformLogText}
+                  onChange={(e) => setFreeformLogText(e.target.value)}
+                  placeholder="Describe vitals & symptoms in plain English to auto-fill via Gemini Nano 4 / Cloud..."
+                  aria-label="Freeform astronaut symptom and vitals intake"
+                  className="flex-1 rounded-xl bg-[#121522] border border-white/15 px-3 py-2 text-xs text-[#FAF9FA] placeholder:text-[#E5E5E4]/45 focus:border-[#A5D8FF] focus:outline-none"
+                />
+                <button
+                  type="button"
+                  disabled={aiParsingBusy || !freeformLogText.trim()}
+                  onClick={async () => {
+                    setAiParsingBusy(true);
+                    setAiParsedBanner(null);
+                    try {
+                      const allAllowed = SYMPTOM_CATEGORIES.flatMap((g) =>
+                        g.items.filter((i) => !i.startsWith('None')),
+                      );
+                      const parsed = await extractStructuredSymptomsAndVitals(
+                        freeformLogText,
+                        allAllowed,
+                        state.assessment.comm_mode?.mode || 'DELAYED',
+                      );
+                      if (Object.keys(parsed.vitalsPatch).length > 0) {
+                        setForm((prev) => ({
+                          ...prev,
+                          ...parsed.vitalsPatch,
+                          notes: parsed.summaryNote || prev.notes,
+                        }));
+                      }
+                      if (parsed.matchedSymptoms.length > 0) {
+                        setSelectedSymptoms((prev) => {
+                          const base = prev.filter((s) => !s.startsWith('None'));
+                          return Array.from(new Set([...base, ...parsed.matchedSymptoms]));
+                        });
+                      }
+                      setAiParsedBanner(
+                        `Extracted ${Object.keys(parsed.vitalsPatch).length} vital(s) & ${parsed.matchedSymptoms.length} symptom(s) via Firebase AI Logic (${parsed.inferenceSource === 'on_device' ? 'On-Device Gemini Nano 4' : 'Cloud Gemini Fallback'} · ${parsed.latencyMs} ms).`,
+                      );
+                    } catch (err) {
+                      setAiParsedBanner(
+                        err instanceof Error
+                          ? `Structured AI parse notice: ${err.message}`
+                          : 'Configure Firebase project or warm up Chrome Gemini Nano 4 to run structured extraction.',
+                      );
+                    } finally {
+                      setAiParsingBusy(false);
+                    }
+                  }}
+                  className="px-3.5 py-2 rounded-xl bg-[#EEF0F6] text-[#040404] text-xs font-semibold shrink-0 disabled:opacity-50"
+                >
+                  {aiParsingBusy ? 'Parsing...' : 'Auto-Extract JSON'}
+                </button>
+              </div>
+              {aiParsedBanner && (
+                <div className="text-[11px] text-[#A5D8FF]">{aiParsedBanner}</div>
+              )}
+            </div>
 
             <div className="space-y-3.5">
               {SYMPTOM_CATEGORIES.map((grp) => (

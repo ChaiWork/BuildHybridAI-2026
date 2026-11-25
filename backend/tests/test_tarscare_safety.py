@@ -1664,6 +1664,138 @@ def test_dual_llm_provider_switching_and_groq_key_redaction(client, monkeypatch)
     assert not any("api.groq.com" in u for u in seen_urls)
 
 
+def test_firebase_hybrid_rag_retrieval_only_mode(client):
+    """Firebase AI Logic Hybrid client retrieval_only mode returns citations fast and preserves prescribing block."""
+    res = client.post(
+        "/api/rag/query",
+        json={
+            "question": "Explain absorbed dose (Gy) vs equivalent dose (Sv) from NASA RadLab.",
+            "include_astronaut_context": True,
+            "retrieval_only": True,
+        },
+    )
+    assert res.status_code == 200
+    body = res.json()
+    assert body["sufficient_evidence"] is True
+    assert len(body["citations"]) >= 1
+    assert body["model_used"] is None
+
+    # Prescribing prohibition must still block even in retrieval_only mode
+    blocked = client.post(
+        "/api/rag/query",
+        json={
+            "question": "What dosage of ibuprofen should I prescribe on Mars?",
+            "retrieval_only": True,
+        },
+    )
+    assert blocked.status_code == 200
+    assert blocked.json()["sufficient_evidence"] is False
+
+
+def test_firebase_only_on_device_companion_safety_gate(client):
+    """Firebase ONLY_ON_DEVICE companion replies persist safely while rejecting leaked dosages and crisis bypasses."""
+    ok_res = client.post(
+        "/api/companion/chat",
+        json={
+            "message": "Feeling homesick after EVA.",
+            "mode": "COMPANION_CHAT",
+            "client_on_device_reply": "It is natural to miss home on Sol 184. Try slow breathing and listening to a favorite recording.",
+            "client_engine_used": "FIREBASE_ONLY_ON_DEVICE · Gemini Nano 4",
+        },
+    )
+    assert ok_res.status_code == 200
+    ok_msg = ok_res.json()["assistant_message"]
+    assert "Gemini Nano 4" in ok_msg["engine_used"]
+    assert "slow breathing" in ok_msg["content"]
+
+    # Leaked medication dosage from client reply must be rejected in favor of safe deterministic reply
+    leak_res = client.post(
+        "/api/companion/chat",
+        json={
+            "message": "I have trouble sleeping.",
+            "mode": "COMPANION_CHAT",
+            "client_on_device_reply": "You should take melatonin 10 mg tonight.",
+            "client_engine_used": "FIREBASE_ONLY_ON_DEVICE · Gemini Nano 4",
+        },
+    )
+    assert leak_res.status_code == 200
+    leak_msg = leak_res.json()["assistant_message"]
+    assert "10 mg" not in leak_msg["content"]
+    assert "Gemini Nano 4" not in leak_msg["engine_used"]
 
 
 
+
+
+
+
+
+def test_firebase_hybrid_rag_retrieval_only_and_safety_scope(client, monkeypatch):
+    """#BuildHybridAI 2026: retrieval_only=True returns verified NASA/CSA citations in <10ms without invoking cloud LLMs, while still enforcing surgical/medication refusals."""
+    import urllib.request
+
+    called_external = []
+    monkeypatch.setattr(
+        urllib.request,
+        "urlopen",
+        lambda req, *a, **kw: called_external.append(str(req)) or (_ for _ in ()).throw(AssertionError("External HTTP blocked")),
+    )
+
+    res = client.post(
+        "/api/rag/query",
+        json={
+            "question": "Explain absorbed dose (Gy) vs equivalent dose (Sv) from NASA RadLab.",
+            "include_astronaut_context": True,
+            "retrieval_only": True,
+        },
+    )
+    assert res.status_code == 200
+    body = res.json()
+    assert body["sufficient_evidence"] is True
+    assert len(body["citations"]) >= 1
+    assert any("RADLAB" in c["doc_id"] or "RAD" in c["doc_id"] for c in body["citations"])
+    assert not called_external
+
+    # Out-of-scope medication dosing query must still be refused deterministically
+    res_med = client.post(
+        "/api/rag/query",
+        json={
+            "question": "What dosage of ibuprofen should I prescribe for headache?",
+            "include_astronaut_context": True,
+            "retrieval_only": True,
+        },
+    )
+    assert res_med.status_code == 200
+    assert res_med.json()["sufficient_evidence"] is False
+
+
+def test_firebase_only_on_device_companion_persistence_and_prescription_gate(client):
+    """#BuildHybridAI 2026: ONLY_ON_DEVICE Gemini Nano 4 companion replies persist locally when safe, and are rejected if they contain medication dosing."""
+    safe_res = client.post(
+        "/api/companion/chat",
+        json={
+            "message": "Feeling a bit homesick after today's Mars surface EVA.",
+            "mode": "COMPANION_CHAT",
+            "client_on_device_reply": "It is completely natural to miss home on Sol 184. Take a quiet moment by the cupola viewport and write down one memory you are grateful for.",
+            "client_engine_used": "FIREBASE_ONLY_ON_DEVICE · Gemini Nano 4 (Zero-Egress Private)",
+        },
+    )
+    assert safe_res.status_code == 200
+    safe_data = safe_res.json()
+    assert "FIREBASE_ONLY_ON_DEVICE" in safe_data["assistant_message"]["engine_used"]
+    assert "cupola viewport" in safe_data["assistant_message"]["content"]
+
+    # Unsafe client text attempting to prescribe medication must be blocked by _PRESCRIPTION_LEAK_RE
+    unsafe_res = client.post(
+        "/api/companion/chat",
+        json={
+            "message": "I cannot sleep properly.",
+            "mode": "COMPANION_CHAT",
+            "client_on_device_reply": "Take 10 mg melatonin tonight before bed.",
+            "client_engine_used": "FIREBASE_ONLY_ON_DEVICE · Gemini Nano 4",
+        },
+    )
+    assert unsafe_res.status_code == 200
+    unsafe_data = unsafe_res.json()
+    assert "10 mg melatonin" not in unsafe_data["assistant_message"]["content"].lower()
+    assert "FIREBASE_ONLY_ON_DEVICE" not in unsafe_data["assistant_message"]["engine_used"]

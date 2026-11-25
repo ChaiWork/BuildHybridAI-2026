@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   AlertTriangle,
   CheckCircle2,
@@ -33,6 +33,11 @@ import {
 import { AIProviderSwitcher } from './AIProviderSwitcher';
 import { DonkiSpaceWeatherPanel } from './DonkiSpaceWeatherPanel';
 import { InsightWeatherPanel } from './InsightWeatherPanel';
+import {
+  HybridSuiteSnapshot,
+  subscribeHybridSuite,
+  syncFirebaseWithCommMode,
+} from '../lib/firebaseHybridAI';
 
 interface HistoryProps {
   state: FullSystemState;
@@ -711,6 +716,11 @@ export const CommunicationStatusView: React.FC<CommProps> = ({
   const [customDistanceMkm, setCustomDistanceMkm] = useState<number>(
     commCentre?.distance_million_km ?? state.comm_state.distance_million_km ?? 255.4
   );
+  const [fbSnap, setFbSnap] = useState<HybridSuiteSnapshot | null>(null);
+
+  useEffect(() => {
+    return subscribeHybridSuite(setFbSnap);
+  }, []);
 
   // Message Centre compose state
   const [msgForm, setMsgForm] = useState({
@@ -732,9 +742,14 @@ export const CommunicationStatusView: React.FC<CommProps> = ({
         method: 'POST',
         body: JSON.stringify({ mode }),
       });
+      await syncFirebaseWithCommMode(mode);
       const fresh = await apiRequest<FullSystemState>('/api/state');
       onStateUpdated(fresh);
-      setNotice(`Communication simulation switched to ${mode}. All health features remain active onboard.`);
+      setNotice(
+        mode === 'OFFLINE'
+          ? 'Switched to OFFLINE Blackout: Cloud Firestore network paused (IndexedDB Store-and-Forward active) & Firebase AI Logic locked to ONLY_ON_DEVICE.'
+          : `Communication simulation switched to ${mode}: Cloud Firestore Store-and-Forward sync active & Remote Config refreshed.`,
+      );
     } catch (err) {
       setSyncError(err instanceof Error ? err.message : 'Unable to switch communication mode.');
     } finally {
@@ -1079,6 +1094,105 @@ export const CommunicationStatusView: React.FC<CommProps> = ({
         {notice && (
           <div className="rounded-xl bg-[#0B0D1A] px-4 py-3 text-sm text-[#A5D8FF] border border-[#A5D8FF]/30">
             {notice}
+          </div>
+        )}
+      </section>
+
+      {/* FIREBASE CLOUD FIRESTORE STORE-AND-FORWARD & ANDROID EVA CROSS-PLATFORM SYNC */}
+      <section className="mc-card p-6 space-y-4 border border-[#A5D8FF]/25">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h2 className="text-lg font-semibold text-[#FAF9FA] flex items-center gap-2">
+              <Globe className="w-4 h-4 text-[#A5D8FF]" />
+              <span>Firebase Offline Store-and-Forward &amp; Cross-Platform Android EVA Sync</span>
+            </h2>
+            <p className="text-xs text-[#E5E5E4]/75 mt-0.5">
+              Powered by Cloud Firestore IndexedDB <code className="text-[#A5D8FF]">persistentLocalCache</code>, Firebase App Check, Crew Auth &amp; Remote Config — syncing field telemetry between the Native Android EVA Companion and Web Habitat Workstation.
+            </p>
+          </div>
+          <span
+            className={`mc-pill border ${
+              fbSnap?.firestoreNetworkEnabled
+                ? 'bg-emerald-500/15 text-emerald-300 border-emerald-500/35'
+                : 'bg-amber-500/15 text-amber-200 border-amber-500/35'
+            }`}
+          >
+            {fbSnap?.firestoreNetworkEnabled
+              ? `Firestore Link Active (${fbSnap.pendingSyncWrites} pending)`
+              : `Firestore Offline Queue (${fbSnap?.pendingSyncWrites ?? 0} queued locally)`}
+          </span>
+        </div>
+
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
+          <div className="rounded-xl bg-[#0B0D1A] p-3.5 border border-white/[0.06]">
+            <span className="text-[#8E95A8] block">Firebase AI Logic Policy</span>
+            <strong className="text-[#FAF9FA] block mt-1">
+              {currentMode === 'OFFLINE'
+                ? 'ONLY_ON_DEVICE (Blackout Locked)'
+                : (fbSnap?.selectedMode || 'prefer_on_device').toUpperCase()}
+            </strong>
+            <span className="text-[11px] text-[#A5D8FF]">
+              Cloud fallback: {fbSnap?.cloudModel || 'gemini-3.5-flash-lite'}
+            </span>
+          </div>
+          <div className="rounded-xl bg-[#0B0D1A] p-3.5 border border-white/[0.06]">
+            <span className="text-[#8E95A8] block">Remote Config Mission Thresholds</span>
+            <strong className="text-[#FAF9FA] block mt-1">
+              CO₂ Warn: {fbSnap?.remoteConfig.co2WarnMmhg ?? 3.0} mmHg · Rad Warn:{' '}
+              {fbSnap?.remoteConfig.radWarnMsv ?? 50} mSv
+            </strong>
+            <span className="text-[11px] text-[#8E95A8]">
+              Source: {fbSnap?.remoteConfig.source || 'default'}
+            </span>
+          </div>
+          <div className="rounded-xl bg-[#0B0D1A] p-3.5 border border-white/[0.06]">
+            <span className="text-[#8E95A8] block">App Check &amp; Multi-Platform Status</span>
+            <strong className="text-[#FAF9FA] block mt-1">
+              {fbSnap?.firebaseConfigured
+                ? `Project: ${fbSnap.projectId}`
+                : 'Local Sandbox (Configure Project to Sync Android ↔ Web)'}
+            </strong>
+            <span className="text-[11px] text-[#A5D8FF]">
+              App Check: {fbSnap?.appCheckMode || 'local_sandbox'}
+            </span>
+          </div>
+        </div>
+
+        {fbSnap && fbSnap.recentSyncItems.length > 0 && (
+          <div className="space-y-2">
+            <div className="text-xs font-semibold text-[#A5D8FF]">
+              Live Cross-Platform Firestore Sync Stream (Web Chrome ↔ Android EVA Companion)
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5 text-xs">
+              {fbSnap.recentSyncItems.slice(0, 6).map((item) => (
+                <div
+                  key={item.id}
+                  className="rounded-xl bg-[#0B0D1A] p-3 border border-white/[0.07] flex flex-col justify-between gap-1.5"
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="font-semibold text-[#FAF9FA]">
+                      {item.sourcePlatform === 'ANDROID_COMPANION'
+                        ? 'Android EVA Companion'
+                        : 'Web Habitat Console'}{' '}
+                      · Sol {item.sol}
+                    </span>
+                    <span
+                      className={`px-2 py-0.5 rounded-full text-[10px] font-semibold ${
+                        item.pendingCloudSync
+                          ? 'bg-amber-500/20 text-amber-200 border border-amber-400/35'
+                          : 'bg-emerald-500/15 text-emerald-300 border border-emerald-500/30'
+                      }`}
+                    >
+                      {item.pendingCloudSync ? 'Queued Locally (IndexedDB)' : 'Synced to Firestore'}
+                    </span>
+                  </div>
+                  <p className="text-[#E5E5E4]/85 line-clamp-2">{item.summary}</p>
+                  <div className="text-[11px] text-[#8E95A8]">
+                    {item.crewName} · AI Source: {item.inferenceSource}
+                  </div>
+                </div>
+              ))}
+            </div>
           </div>
         )}
       </section>

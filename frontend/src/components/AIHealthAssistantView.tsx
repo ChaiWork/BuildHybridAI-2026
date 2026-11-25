@@ -4,6 +4,7 @@ import { FullSystemState, KnowledgeDocItem, RAGAnalysisResponse } from '../types
 import { AIProviderSwitcher } from './AIProviderSwitcher';
 import { OfflineDocModal } from './OfflineDocModal';
 import { apiRequest } from './uiHelpers';
+import { runHybridMedicalRAG } from '../lib/firebaseHybridAI';
 
 interface AIHealthAssistantViewProps {
   state: FullSystemState;
@@ -73,21 +74,62 @@ export const AIHealthAssistantView: React.FC<AIHealthAssistantViewProps> = ({
     setQuestion('');
     setLoading(true);
     try {
-      const res = await apiRequest<RAGAnalysisResponse>('/api/rag/query', {
+      // Step 1: Retrieve safety-verified NASA/CSA citations & scope checks locally
+      const retrieved = await apiRequest<RAGAnalysisResponse>('/api/rag/query', {
         method: 'POST',
         body: JSON.stringify({
           question: trimmed,
           hazard_filter: hazardFilter || null,
           include_astronaut_context: true,
           history: recentHistory,
+          retrieval_only: true,
         }),
       });
+
+      let finalResponse: RAGAnalysisResponse = retrieved;
+
+      // Step 2: Synthesize via Firebase AI Logic Hybrid SDK (Chrome Gemini Nano 4 -> Cloud Gemini fallback)
+      if (retrieved.sufficient_evidence && retrieved.citations.length > 0) {
+        const commMode = state.assessment.comm_mode?.mode || 'DELAYED';
+        const t = state.latest_telemetry;
+        const astronautSummary = `${state.astronaut.name} (Sol ${t.mission_day}, ${t.gravity_g}g, Status ${state.assessment.overall_status}): HR ${Math.round(t.heart_rate_bpm)} BPM (base ${Math.round(state.astronaut.baseline_hr_bpm)}), BP ${Math.round(t.systolic_bp_mmhg)}/${Math.round(t.diastolic_bp_mmhg)} mmHg, SpO2 ${t.spo2_pct.toFixed(1)}%, CO2 ${t.co2_mmhg.toFixed(2)} mmHg, Rad ${t.equivalent_dose_rate_msv_day.toFixed(2)} mSv/day (${t.absorbed_dose_mgy.toFixed(2)} mGy).`;
+
+        const hybrid = await runHybridMedicalRAG({
+          question: trimmed,
+          commMode,
+          astronautSummary,
+          citations: retrieved.citations,
+          fallbackAnswer: retrieved.answer,
+        });
+
+        const answerWithConflict =
+          retrieved.conflict_notice &&
+          !hybrid.answer.toLowerCase().includes('conflict notice') &&
+          !hybrid.answer.toLowerCase().includes('regime')
+            ? `${hybrid.answer}\n\nSource & Regime Conflict Notice: ${retrieved.conflict_notice}`
+            : hybrid.answer;
+
+        finalResponse = {
+          ...retrieved,
+          answer: answerWithConflict,
+          engine_mode: hybrid.engineMode,
+          model_used: hybrid.modelUsed,
+          latency_ms: hybrid.latencyMs,
+          safety_notice:
+            hybrid.telemetry.sourceActual === 'on_device'
+              ? 'Synthesized locally on-device via Firebase AI Logic (Chrome Gemini Nano 4 · Zero Network Egress) from indexed NASA & CSA sources. Non-diagnostic prototype.'
+              : hybrid.telemetry.sourceActual === 'in_cloud'
+                ? 'Synthesized via Firebase AI Logic Cloud Fallback (App Check protected) from indexed NASA & CSA sources. Non-diagnostic prototype.'
+                : retrieved.safety_notice,
+        };
+      }
+
       setTurns((prev) => [
         ...prev,
         {
           role: 'assistant',
-          text: res.answer,
-          response: res,
+          text: finalResponse.answer,
+          response: finalResponse,
         },
       ]);
     } catch (err) {
@@ -122,7 +164,7 @@ export const AIHealthAssistantView: React.FC<AIHealthAssistantViewProps> = ({
             <div>
               <h1 className="text-xl font-bold text-[#FAF9FA]">TARS Care Health Assistant</h1>
               <p className="text-xs text-[#E5E5E4]/75">
-                Grounded in NASA HRP, OSDR, RadLab, NLSP, EDA &amp; CSA research · supports Local LLM &amp; Groq API
+                Firebase AI Logic Hybrid RAG · Chrome Gemini Nano 4 On-Device + Cloud Gemini Fallback over 28 NASA/CSA Docs
               </p>
             </div>
           </div>

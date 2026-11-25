@@ -1,0 +1,25 @@
+{
+  "_comment": "Optional: Copy your Firebase Android app google-services.json to android/app/google-services.json (gitignored), OR enter projectId / apiKey / appId directly inside the TARS Care EVA Android app Settings sheet.",
+  "project_info": {
+    "project_number": "000000000000",
+    "project_id": "your-firebase-project-id",
+    "storage_bucket": "your-firebase-project-id.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:000000000000:android:0000000000000000000000",
+        "android_client_info": {
+          "package_name": "space.tarscare.eva"
+        }
+      },
+      "api_key": [
+        {
+          "current_key": "REPLACE_WITH_YOUR_FIREBASE_ANDROID_API_KEY"
+        }
+      ]
+    }
+  ],
+  "configuration_version": "1"
+}
+

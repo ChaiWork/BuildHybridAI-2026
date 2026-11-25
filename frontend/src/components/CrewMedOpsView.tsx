@@ -12,6 +12,7 @@ import {
 } from 'lucide-react';
 import { FullSystemState, RiskLevel } from '../types';
 import { apiRequest, statusMeta } from './uiHelpers';
+import { synthesizeAndQueueFlightSurgeonBrief } from '../lib/firebaseHybridAI';
 
 interface CrewMedOpsViewProps {
   state: FullSystemState;
@@ -150,10 +151,20 @@ export const CrewMedOpsView: React.FC<CrewMedOpsViewProps> = ({
         }),
       });
       onStateUpdated(res.state);
-      setConsultMarkdown(res.markdown_preview);
+      const hybridBrief = await synthesizeAndQueueFlightSurgeonBrief({
+        crewId: state.astronaut.astronaut_id,
+        crewName: state.astronaut.name,
+        sol: state.latest_telemetry.mission_day,
+        urgency: consultUrgency,
+        commMode: state.assessment.comm_mode?.mode || 'DELAYED',
+        consultMarkdown: res.markdown_preview,
+        cmoNotes,
+      });
+      const enrichedPreview = `${res.markdown_preview}\n\n---\n### Firebase AI Logic Hybrid Executive Brief (${hybridBrief.inferenceSource.toUpperCase()} · ${hybridBrief.latencyMs} ms)\n${hybridBrief.aiBrief}\n`;
+      setConsultMarkdown(enrichedPreview);
       setNotice({
         kind: 'ok',
-        text: `Consult packet ${res.report.report_uid} prepared (${res.report.transmission_status}) with zero automated prescriptions and private journals redacted.`,
+        text: `Consult packet ${res.report.report_uid} prepared (${res.report.transmission_status})${hybridBrief.queuedInFirestore ? ` & queued in Cloud Firestore (${hybridBrief.pendingCloudSync ? 'Offline Cache — auto-syncs on link restore' : 'Synced to Mission Control'})` : ''} with private journals redacted.`,
       });
     } catch (err) {
       setNotice({
